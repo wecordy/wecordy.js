@@ -1,0 +1,49 @@
+{
+  "name": "@wecordy/core",
+  "version": "1.0.3",
+  "description": "Official bot library for the Wecordy platform",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc --watch -p tsconfig.json",
+    "format": "npx prettier --write ."
+  },
+  "engines": {
+    "node": ">=18.0"
+  },
+  "keywords": [
+    "wecordy",
+    "bot",
+    "sdk",
+    "api",
+    "websocket",
+    "chat"
+  ],
+  "author": "Wecordy Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wecordy/wecordy.js"
+  },
+  "dependencies": {
+    "axios": "1.14.0",
+    "eventemitter3": "^5.0.1",
+    "socket.io-client": "^4.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
