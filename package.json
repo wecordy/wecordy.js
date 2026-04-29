@@ -1,6 +1,6 @@
 {
   "name": "@wecordy/core",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Official bot library for the Wecordy platform",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
