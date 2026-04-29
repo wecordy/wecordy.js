@@ -5,6 +5,7 @@ import type { Channel, APIChannel } from './Channel';
 import type { Server, APIServer } from './Server';
 import { MessageReaction, type APIMessageReaction } from './MessageReaction';
 import { Collection } from '../util/Collection';
+import { Formatters } from '../util/Formatters';
 
 export interface APIMessageAttachment {
   url: string;
@@ -120,7 +121,7 @@ export class Message extends Base {
     }
 
     this.forumPostId = data.forum_post_id ?? null;
-    this.content = data.text;
+    this.content = Formatters.cleanContent(data.text);
 
     // reply_to_message_id -> replyToMessageId & replyToMessage
     if (typeof data.reply_to_message_id === 'string' || !data.reply_to_message_id) {
@@ -235,7 +236,7 @@ export class Message extends Base {
    * Updates this message with new data.
    */
   _patch(data: Partial<APIMessage>): Message {
-    if (data.text !== undefined) this.content = data.text;
+    if (data.text !== undefined) this.content = Formatters.cleanContent(data.text);
 
     if (data.user_id !== undefined) {
       if (typeof data.user_id === 'string' || !data.user_id) {

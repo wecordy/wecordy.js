@@ -142,7 +142,7 @@ export class WebSocketManager extends EventEmitter {
    */
   private handleMessage(payload: GatewayPayload): void {
     const eventType = payload.type ?? payload.data?.type;
-    const eventData = payload.data?.data ?? payload.data ?? payload;
+    const eventData = payload.type ? payload.data : (payload.data?.data ?? payload.data ?? payload);
 
     if (!eventType) {
       this.client.emit(Events.Debug, `[WS] Received message without event type`);

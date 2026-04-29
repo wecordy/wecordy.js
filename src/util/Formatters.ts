@@ -124,4 +124,37 @@ export class Formatters {
   private static formatMention(id: string, label: string): string {
     return `[@ id="${id}" label="${label}"]`;
   }
+
+  /**
+   * Cleans mentions and slash commands from raw content.
+   * @param content - The raw content string
+   * @returns The cleaned content string
+   */
+  static cleanContent(content: string): string {
+    if (!content) return '';
+
+    const mentionRegex = /\[@\s*id="([^"]+)"\s+label="([^"]+)"(?:\s+type="([^"]+)")?\s*\]/g;
+    const commandRegex = /\[\s*\/\s*id="([^"]+)"\s+label="([^"]+)"\s+applicationId="([^"]+)"(?:\s+optionValues="([^"]+)")?\s*\]/g;
+
+    let result = content.replace(mentionRegex, '@$2');
+
+    result = result.replace(commandRegex, (match, id, label, appId, optionValues) => {
+      let optionsStr = '';
+      if (optionValues) {
+        try {
+          const decoded = optionValues.replace(/&quot;/g, '"').replace(/'/g, '"');
+          const options = JSON.parse(decoded);
+          optionsStr = Object.entries(options)
+            .filter(([_, v]) => v)
+            .map(([k, v]) => ` ${k}: ${v}`)
+            .join('');
+        } catch (e) {
+          // Fallback for invalid JSON
+        }
+      }
+      return `/${label}${optionsStr}`;
+    });
+
+    return result;
+  }
 }

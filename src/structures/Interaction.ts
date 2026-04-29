@@ -105,21 +105,27 @@ export class Interaction extends Base {
     }
 
     // channel_id -> channelId & channel
-    if (typeof data.channel_id === 'string' || !data.channel_id) {
-      this.channelId = data.channel_id as string ?? null;
-      this.channel = null;
-    } else {
+    if (typeof data.channel_id === 'string') {
+      this.channelId = data.channel_id;
+      this.channel = this.client.channels.cache.get(this.channelId) ?? null;
+    } else if (data.channel_id) {
       this.channel = this.client.channels._add(data.channel_id);
       this.channelId = this.channel.id;
+    } else {
+      this.channelId = null;
+      this.channel = null;
     }
 
     // server_id -> serverId & server
-    if (typeof data.server_id === 'string' || !data.server_id) {
-      this.serverId = data.server_id as string ?? null;
-      this.server = null;
-    } else {
+    if (typeof data.server_id === 'string') {
+      this.serverId = data.server_id;
+      this.server = this.client.servers.cache.get(this.serverId) ?? null;
+    } else if (data.server_id) {
       this.server = this.client.servers._add(data.server_id);
       this.serverId = this.server.id;
+    } else {
+      this.serverId = null;
+      this.server = null;
     }
 
     // user
@@ -259,15 +265,13 @@ export class CommandInteraction extends Interaction {
       throw new Error('This interaction has already been replied to or deferred.');
     }
 
-    const payload = typeof content === 'string' ? { content } : content;
+    if (!this.channelId) {
+      throw new Error('Cannot reply to an interaction without a channel.');
+    }
 
-    await this.client.rest.post(
-      APIRoutes.interactionCallback(this.id, this.interactionToken),
-      {
-        type: InteractionResponseType.ChannelMessageWithSource,
-        data: payload,
-      },
-    );
+    const text = typeof content === 'string' ? content : content.content;
+    
+    await this.client.messages.send(this.channelId, { text });
 
     this.replied = true;
   }
@@ -281,13 +285,7 @@ export class CommandInteraction extends Interaction {
       throw new Error('This interaction has already been replied to or deferred.');
     }
 
-    await this.client.rest.post(
-      APIRoutes.interactionCallback(this.id, this.interactionToken),
-      {
-        type: InteractionResponseType.DeferredChannelMessageWithSource,
-      },
-    );
-
+    // Backend doesn't support interaction states natively yet.
     this.deferred = true;
   }
 
@@ -296,12 +294,7 @@ export class CommandInteraction extends Interaction {
    * @param content - The new content
    */
   async editReply(content: string | { content: string }): Promise<void> {
-    const payload = typeof content === 'string' ? { content } : content;
-
-    await this.client.rest.patch(
-      APIRoutes.interactionOriginalResponse(this.applicationId, this.interactionToken),
-      payload,
-    );
+    throw new Error('editReply is not supported yet with standard message replies.');
   }
 
   /**
@@ -309,14 +302,11 @@ export class CommandInteraction extends Interaction {
    * @param content - The follow-up message content
    */
   async followUp(content: string | { content: string }): Promise<void> {
-    const payload = typeof content === 'string' ? { content } : content;
+    if (!this.channelId) {
+      throw new Error('Cannot follow up without a channel.');
+    }
 
-    await this.client.rest.post(
-      APIRoutes.interactionCallback(this.id, this.interactionToken),
-      {
-        type: InteractionResponseType.ChannelMessageWithSource,
-        data: payload,
-      },
-    );
+    const text = typeof content === 'string' ? content : content.content;
+    await this.client.messages.send(this.channelId, { text });
   }
 }
