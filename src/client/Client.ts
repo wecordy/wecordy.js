@@ -18,6 +18,8 @@ import { Role } from '../structures/Role';
 import { Interaction, CommandInteraction } from '../structures/Interaction';
 import { Events } from '../util/Events';
 import { TokenError, WebSocketError } from '../errors';
+import { Collection } from '../util/Collection';
+import type { VoiceConnection } from '../voice/VoiceConnection';
 import type {
   MessageReactionPayload,
   VoiceStatePayload,
@@ -166,6 +168,9 @@ export class Client extends EventEmitter<ClientEvents> {
   /** Whether the client is ready */
   public isReady: boolean = false;
 
+  /** Active voice connections, keyed by channel ID */
+  public readonly voiceConnections: Collection<string, VoiceConnection> = new Collection();
+
   /** The bot token (stored privately) */
   private token: string | null = null;
 
@@ -257,6 +262,12 @@ export class Client extends EventEmitter<ClientEvents> {
 
     // Disconnect WebSocket
     this.ws.disconnect();
+    
+    // Disconnect all voice connections
+    for (const connection of this.voiceConnections.values()) {
+      connection.disconnect().catch(() => {});
+    }
+    this.voiceConnections.clear();
 
     // Clear all caches
     this.servers.cache.clear();

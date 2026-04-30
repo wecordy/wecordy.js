@@ -5,6 +5,7 @@ import type { Server, APIServer } from './Server';
 import type { Message, APIMessage } from './Message';
 import { ChannelPermissionOverride, type APIChannelPermissionOverride } from './ChannelPermissionOverride';
 import { Collection } from '../util/Collection';
+import { VoiceConnection } from '../voice/VoiceConnection';
 
 export interface APIChannel {
   id: string;
@@ -138,6 +139,33 @@ export class Channel extends Base {
    */
   async send(content: string | { text: string; attachments?: Array<{ url: string; mimetype: string; size: number }> }): Promise<Message> {
     return this.client.messages.send(this.id, content);
+  }
+
+  /**
+   * Joins the voice channel.
+   * Only works if the channel is voice-based.
+   */
+  async join(): Promise<VoiceConnection> {
+    if (!this.isVoiceBased()) {
+      throw new Error('Cannot join a non-voice channel.');
+    }
+
+    const connection = new VoiceConnection(this.client, {
+      channelId: this.id,
+      serverId: this.serverId,
+    });
+
+    return connection.connect();
+  }
+
+  /**
+   * Leaves the voice channel if connected.
+   */
+  async leave(): Promise<void> {
+    const connection = this.client.voiceConnections.get(this.id);
+    if (connection) {
+      await connection.disconnect();
+    }
   }
 
   /**

@@ -32,7 +32,9 @@
   "dependencies": {
     "axios": "1.14.0",
     "eventemitter3": "^5.0.1",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "werift": "^0.23.0",
+    "werift-rtp": "^0.8.8"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

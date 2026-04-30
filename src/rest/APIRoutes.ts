@@ -56,6 +56,24 @@ export const APIRoutes = {
   updateChannel: (channelId: string) => `/v1/channel/${channelId}` as const,
   /** DELETE - Delete a channel */
   deleteChannel: (channelId: string) => `/v1/channel/${channelId}` as const,
+  /** POST - Join voice channel */
+  joinVoiceChannel: () => `/v1/channel/join` as const,
+  /** POST - Disconnect voice channel */
+  disconnectVoiceChannel: () => `/v1/channel/disconnect` as const,
+  /** POST - Add tracks to voice channel */
+  addTracks: () => `/v1/channel/add-tracks` as const,
+
+  // ─── Cloudflare Calls ───────────────────────────────────────────
+  /** POST - Create Cloudflare Session */
+  cloudflareSession: () => `/v1/cloudflare/session` as const,
+  /** POST - Send new tracks offer to Cloudflare */
+  cloudflareNewTracks: () => `/v1/cloudflare/tracks` as const,
+  /** POST - Send renegotiation to Cloudflare */
+  cloudflareRenegotiate: () => `/v1/cloudflare/renegotiate` as const,
+  /** POST - Close tracks on Cloudflare */
+  cloudflareCloseTracks: () => `/v1/cloudflare/close` as const,
+  /** POST - Get session info/tracks from Cloudflare */
+  cloudflareGetTracks: () => `/v1/cloudflare/session/info` as const,
 
   // ─── Messages ───────────────────────────────────────────────────
   /** POST - Get messages in a channel */

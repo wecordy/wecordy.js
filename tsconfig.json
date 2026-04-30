@@ -9,7 +9,8 @@
     "resolveJsonModule": true,
     "declaration": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true
   },
   "exclude": [
     "node_modules",

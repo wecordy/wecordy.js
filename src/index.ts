@@ -16,6 +16,8 @@ export {
   type APIInteractionData,
   type APIInteractionOption,
 } from './structures/Interaction';
+export { VoiceConnection, type VoiceConnectionOptions } from './voice/VoiceConnection';
+export { AudioPlayer } from './voice/AudioPlayer';
 
 // ─── Managers ──────────────────────────────────────────────────
 export { BaseManager } from './managers/BaseManager';
