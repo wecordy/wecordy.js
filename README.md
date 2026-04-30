@@ -21,7 +21,34 @@ TypeScript ekosisteminde kurumsal standartlarda, ölçeklenebilir ve güvenli bo
 - **Gelişmiş Mimari:** Manager ve Cache mimarisi ile optimize edilmiş veri yönetimi.
 - **Dinamik Slash Komutları:** Dahili builder yapısı ile kolay komut kaydı ve yönetimi.
 - **Gelişmiş Cache:** Sunucu, kanal, mesaj ve üye verileri için optimize edilmiş bellek yönetimi.
+- **Sesli Kanal ve Müzik Desteği:** WebRTC tabanlı sesli bağlantı ve yt-dlp ile yüksek performanslı müzik yayını.
 - **Event-Driven:** WebSocket tabanlı gerçek zamanlı olay yönetimi.
+
+Wecordy.js, WebRTC kullanarak düşük gecikmeli ses iletimi sağlar. Hem YouTube üzerinden canlı yayın (streaming) hem de yerel WebM/Opus dosyalarını oynatmayı destekler.
+
+### YouTube Desteği
+YouTube üzerinden müzik çalmak için sisteminizde `yt-dlp` kurulu olmalıdır:
+
+```bash
+# macOS
+brew install yt-dlp
+
+# Windows (winget)
+winget install yt-dlp
+
+# Linux (Ubuntu/Debian)
+sudo apt install yt-dlp
+```
+
+### Kod Örnekleri
+
+```typescript
+// YouTube üzerinden oynatma
+connection.playUrl('https://www.youtube.com/watch?v=...');
+
+// Yerel dosyadan oynatma (WebM/Opus)
+connection.play('./music/song.webm');
+```
 
 ## 📦 Kurulum
 
@@ -134,6 +161,11 @@ const client = new Client({
 
 - **Node.js:** v18.0.0 or higher
 - **TypeScript:** v5.0+ (opsiyonel ancak tavsiye edilir)
+- **yt-dlp:** YouTube streaming için gereklidir
+
+## 💡 Örnek Kullanım
+
+Kütüphanenin tüm özelliklerini (müzik komutları dahil) içeren detaylı bir örnek için [example](example/index.ts) klasörüne göz atabilirsiniz.
 
 ## 📄 Lisans
 

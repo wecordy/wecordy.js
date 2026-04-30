@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { ChildProcess } from 'child_process';
 import { MediaStreamTrack, RtpPacket, RtpHeader } from 'werift';
 
 // WebM EBML element IDs
@@ -14,7 +15,6 @@ const CONTAINER_IDS = new Set([
 
 /**
  * Reads an EBML variable-length integer (VINT) used for element sizes.
- * Returns the decoded value and byte length consumed.
  */
 function readVint(data: Buffer, offset: number): { value: number; length: number } {
   if (offset >= data.length) throw new Error('Unexpected end of data');
@@ -25,7 +25,6 @@ function readVint(data: Buffer, offset: number): { value: number; length: number
     length++;
     mask >>= 1;
   }
-  // Mask off the length marker bit to get the value
   let value = firstByte & (mask - 1);
   for (let i = 1; i < length; i++) {
     if (offset + i >= data.length) throw new Error('Unexpected end of data');
@@ -35,8 +34,7 @@ function readVint(data: Buffer, offset: number): { value: number; length: number
 }
 
 /**
- * Reads an EBML element ID.
- * IDs keep the leading marker bit (unlike size VINTs).
+ * Reads an EBML element ID (keeps leading marker bit).
  */
 function readElementId(data: Buffer, offset: number): { id: number; length: number } {
   if (offset >= data.length) throw new Error('Unexpected end of data');
@@ -47,7 +45,7 @@ function readElementId(data: Buffer, offset: number): { id: number; length: numb
     length++;
     mask >>= 1;
   }
-  let id = firstByte; // Keep the marker bit for element IDs
+  let id = firstByte;
   for (let i = 1; i < length; i++) {
     if (offset + i >= data.length) throw new Error('Unexpected end of data');
     id = id * 256 + data[offset + i];
@@ -56,8 +54,7 @@ function readElementId(data: Buffer, offset: number): { id: number; length: numb
 }
 
 /**
- * Check if an EBML size value represents "unknown size"
- * (all data bits set to 1, e.g. 0x7F for 1-byte, 0x3FFF for 2-byte, etc.)
+ * Check if an EBML size value represents "unknown size".
  */
 function isUnknownSize(value: number, vintLength: number): boolean {
   const maxValues = [0x7f, 0x3fff, 0x1fffff, 0x0fffffff];
@@ -65,12 +62,23 @@ function isUnknownSize(value: number, vintLength: number): boolean {
 }
 
 /**
- * Extracts raw Opus frames from a WebM/Opus file buffer.
- * Parses EBML structure, finds SimpleBlock elements, and extracts the audio payload.
+ * Extracts Opus frames from a WebM buffer (batch mode).
  */
-function extractOpusFrames(data: Buffer): Buffer[] {
+export function extractOpusFrames(data: Buffer): Buffer[] {
+  const result = extractOpusFramesIncremental(data, 0);
+  return result.frames;
+}
+
+/**
+ * Incrementally extracts Opus frames from a WebM buffer starting at a given offset.
+ * Returns extracted frames and the new offset to resume parsing from.
+ */
+export function extractOpusFramesIncremental(
+  data: Buffer,
+  startOffset: number,
+): { frames: Buffer[]; newOffset: number } {
   const frames: Buffer[] = [];
-  let offset = 0;
+  let offset = startOffset;
 
   while (offset < data.length - 1) {
     try {
@@ -79,50 +87,52 @@ function extractOpusFrames(data: Buffer): Buffer[] {
       const headerSize = idLen + sizeLen;
 
       if (id === SIMPLE_BLOCK_ID && !isUnknownSize(size, sizeLen)) {
-        // Parse SimpleBlock: trackNum(VINT) + timecode(int16) + flags(uint8) + frameData
-        const blockStart = offset + headerSize;
-        const blockEnd = blockStart + size;
+        const blockEnd = offset + headerSize + size;
 
-        if (blockEnd <= data.length) {
-          const blockData = data.subarray(blockStart, blockEnd);
-          // Read track number VINT (just to know how many bytes to skip)
-          const { length: trackNumLen } = readVint(blockData, 0);
-          // Skip: trackNum + 2 bytes timecode + 1 byte flags
-          const frameStart = trackNumLen + 3;
-          if (frameStart < blockData.length) {
-            const frame = Buffer.from(blockData.subarray(frameStart));
-            if (frame.length > 0) {
-              frames.push(frame);
-            }
+        // Not enough data yet — stop and wait for more
+        if (blockEnd > data.length) {
+          break;
+        }
+
+        const blockData = data.subarray(offset + headerSize, blockEnd);
+        const { length: trackNumLen } = readVint(blockData, 0);
+        const frameStart = trackNumLen + 3;
+        if (frameStart < blockData.length) {
+          const frame = Buffer.from(blockData.subarray(frameStart));
+          if (frame.length > 0) {
+            frames.push(frame);
           }
         }
-        offset += headerSize + size;
+        offset = blockEnd;
       } else if (CONTAINER_IDS.has(id) || isUnknownSize(size, sizeLen)) {
-        // Descend into container elements
         offset += headerSize;
       } else {
-        // Skip non-container, non-block elements
         if (isUnknownSize(size, sizeLen)) {
           offset += headerSize;
         } else {
-          offset += headerSize + size;
+          const elementEnd = offset + headerSize + size;
+          // Not enough data for this element yet
+          if (elementEnd > data.length) {
+            break;
+          }
+          offset = elementEnd;
         }
       }
     } catch {
-      break; // End of parseable data
+      break;
     }
   }
 
-  return frames;
+  return { frames, newOffset: offset };
 }
 
 /**
- * AudioPlayer — extracts Opus frames from a WebM file and streams them
- * over a WebRTC track at real-time pace (20ms intervals).
+ * AudioPlayer — plays Opus frames over a WebRTC track at 20ms intervals.
+ * Supports both batch mode (from file/buffer) and streaming mode.
  */
 export class AudioPlayer {
   private readonly track: MediaStreamTrack;
-  private readonly filePath: string;
+  private readonly source: string;
   private timer: ReturnType<typeof setInterval> | null = null;
   private isPlaying: boolean = false;
   private frames: Buffer[] = [];
@@ -130,46 +140,92 @@ export class AudioPlayer {
   private sequenceNumber: number = 0;
   private timestamp: number = 0;
   private ssrc: number;
+  private streamEnded: boolean = false;
+  private isPaused: boolean = false;
+  private sourceProcess: ChildProcess | null = null;
 
-  constructor(track: MediaStreamTrack, filePath: string) {
+  constructor(track: MediaStreamTrack, source: string) {
     this.track = track;
-    this.filePath = filePath;
+    this.source = source;
     this.ssrc = (Math.random() * 0xffffffff) >>> 0;
   }
 
   /**
-   * Starts playback: parses the file, extracts Opus frames,
-   * then sends one frame every 20ms as a proper RTP packet.
+   * Creates an AudioPlayer from a local file path.
+   */
+  public static fromFile(track: MediaStreamTrack, filePath: string): AudioPlayer {
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+    const fileData = fs.readFileSync(filePath);
+    const player = new AudioPlayer(track, filePath);
+    player.frames = extractOpusFrames(fileData);
+    player.streamEnded = true;
+    return player;
+  }
+
+  /**
+   * Creates an AudioPlayer from a raw WebM/Opus buffer.
+   */
+  public static fromBuffer(track: MediaStreamTrack, data: Buffer, label: string = 'buffer'): AudioPlayer {
+    const player = new AudioPlayer(track, label);
+    player.frames = extractOpusFrames(data);
+    player.streamEnded = true;
+    return player;
+  }
+
+  /**
+   * Creates a streaming AudioPlayer that receives frames incrementally.
+   */
+  public static createStream(track: MediaStreamTrack, label: string = 'stream'): AudioPlayer {
+    return new AudioPlayer(track, label);
+  }
+
+  /**
+   * Pushes Opus frames to the playback queue (used in streaming mode).
+   */
+  public pushFrames(newFrames: Buffer[]): void {
+    this.frames.push(...newFrames);
+  }
+
+  /**
+   * Marks the stream as complete — no more frames will arrive.
+   */
+  public markEnd(): void {
+    this.streamEnded = true;
+  }
+
+  /**
+   * Starts playback. Sends one Opus frame every 20ms as a proper RTP packet.
+   * In streaming mode, waits for frames if the buffer runs dry.
    */
   public start(): void {
     if (this.isPlaying) return;
-
-    if (!fs.existsSync(this.filePath)) {
-      throw new Error(`File not found: ${this.filePath}`);
-    }
-
-    // Read the entire file and extract Opus frames from WebM container
-    const fileData = fs.readFileSync(this.filePath);
-    this.frames = extractOpusFrames(fileData);
-
-    if (this.frames.length === 0) {
-      throw new Error('No Opus frames found in the file. Make sure it is a WebM/Opus file.');
-    }
-
-    console.log(
-      `[AudioPlayer] Extracted ${this.frames.length} Opus frames (~${((this.frames.length * 20) / 1000).toFixed(1)}s) from ${this.filePath}`,
-    );
 
     this.isPlaying = true;
     this.frameIndex = 0;
     this.sequenceNumber = (Math.random() * 0xffff) >>> 0;
     this.timestamp = (Math.random() * 0xffffffff) >>> 0;
 
-    // Send one Opus frame every 20ms (standard Opus frame duration at 48kHz)
+    console.log(`[AudioPlayer] Starting playback: ${this.source}`);
+
     this.timer = setInterval(() => {
-      if (!this.isPlaying || this.frameIndex >= this.frames.length) {
+      if (!this.isPlaying) {
         this.stop();
-        console.log(`[AudioPlayer] Finished playing ${this.filePath}`);
+        return;
+      }
+
+      // Skip sending when paused
+      if (this.isPaused) return;
+
+      // If we've consumed all frames...
+      if (this.frameIndex >= this.frames.length) {
+        if (this.streamEnded) {
+          // Stream is done and all frames played
+          console.log(`[AudioPlayer] Finished playing ${this.source} (${this.frames.length} frames)`);
+          this.stop();
+        }
+        // else: still streaming, wait for more frames
         return;
       }
 
@@ -189,18 +245,20 @@ export class AudioPlayer {
   private buildRtpPacket(opusFrame: Buffer): Buffer {
     const header = Buffer.alloc(12);
 
-    // Byte 0: V=2 (bits 6-7), P=0, X=0, CC=0
-    header[0] = 0x80;
-    // Byte 1: M=0, PT=111 (Opus)
-    header[1] = 111;
-    // Bytes 2-3: Sequence number
+    header[0] = 0x80; // V=2, P=0, X=0, CC=0
+    header[1] = 111; // M=0, PT=111 (Opus)
     header.writeUInt16BE(this.sequenceNumber, 2);
-    // Bytes 4-7: Timestamp
     header.writeUInt32BE(this.timestamp, 4);
-    // Bytes 8-11: SSRC
     header.writeUInt32BE(this.ssrc, 8);
 
     return Buffer.concat([header, opusFrame]);
+  }
+
+  /**
+   * Links a child process (like yt-dlp) to this player so it can be killed when playback stops.
+   */
+  public setSourceProcess(process: ChildProcess): void {
+    this.sourceProcess = process;
   }
 
   /**
@@ -208,11 +266,33 @@ export class AudioPlayer {
    */
   public stop(): void {
     this.isPlaying = false;
+    this.isPaused = false;
+
+    if (this.sourceProcess) {
+      this.sourceProcess.kill();
+      this.sourceProcess = null;
+    }
+
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
     this.frames = [];
     this.frameIndex = 0;
+    this.streamEnded = false;
+  }
+
+  /**
+   * Pauses the playback. Can be resumed with resume().
+   */
+  public pause(): void {
+    this.isPaused = true;
+  }
+
+  /**
+   * Resumes playback after a pause.
+   */
+  public resume(): void {
+    this.isPaused = false;
   }
 }

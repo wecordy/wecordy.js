@@ -1,7 +1,8 @@
 import { RTCPeerConnection, MediaStreamTrack, RTCSessionDescription } from 'werift';
+import { spawn } from 'child_process';
 import type { Client } from '../client/Client';
 import { APIRoutes } from '../rest/APIRoutes';
-import { AudioPlayer } from './AudioPlayer';
+import { AudioPlayer, extractOpusFramesIncremental } from './AudioPlayer';
 
 export interface VoiceConnectionOptions {
   channelId: string;
@@ -44,7 +45,6 @@ export class VoiceConnection {
     // 3. Initialize PeerConnection
     this.peerConnection = new RTCPeerConnection({
       bundlePolicy: 'max-bundle',
-      // In a real scenario, we might need ICE servers from cloudflareIceServerData()
     });
 
     // 4. Create Audio Track (for sending)
@@ -102,8 +102,8 @@ export class VoiceConnection {
   }
 
   /**
-   * Plays an audio file.
-   * @param filePath - Path to the audio file
+   * Plays an audio file from disk.
+   * @param filePath - Path to a WebM/Opus audio file
    */
   public play(filePath: string): AudioPlayer {
     if (!this.audioTrack) {
@@ -114,9 +114,106 @@ export class VoiceConnection {
       this.player.stop();
     }
 
-    this.player = new AudioPlayer(this.audioTrack, filePath);
+    this.player = AudioPlayer.fromFile(this.audioTrack, filePath);
     this.player.start();
     return this.player;
+  }
+
+  /**
+   * Streams audio from a YouTube URL and plays it in real-time.
+   * Uses yt-dlp to pipe WebM/Opus data and parses frames incrementally.
+   * Playback starts as soon as the first frames arrive — no full download needed.
+   * @param url - YouTube video URL
+   */
+  public playUrl(url: string): AudioPlayer {
+    if (!this.audioTrack) {
+      throw new Error('Cannot play audio: No audio track established.');
+    }
+
+    if (this.player) {
+      this.player.stop();
+    }
+
+    console.log(`[VoiceConnection] Streaming audio from: ${url}`);
+
+    this.player = AudioPlayer.createStream(this.audioTrack, url);
+    this.player.start();
+
+    // Spawn yt-dlp and pipe stdout through incremental WebM parser
+    this.streamYouTubeAudio(url, this.player);
+
+    return this.player;
+  }
+
+  /**
+   * Spawns yt-dlp, pipes stdout, and incrementally parses WebM to push
+   * Opus frames into the player's queue as they arrive.
+   */
+  private streamYouTubeAudio(url: string, player: AudioPlayer): void {
+    const child = spawn('yt-dlp', ['-f', 'bestaudio[ext=webm]/bestaudio', '--no-playlist', '-o', '-', url.trim()]);
+
+    player.setSourceProcess(child);
+
+    let buffer = Buffer.alloc(0);
+    let parseOffset = 0;
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+
+      // Incrementally extract any complete Opus frames
+      const { frames, newOffset } = extractOpusFramesIncremental(buffer, parseOffset);
+      parseOffset = newOffset;
+
+      if (frames.length > 0) {
+        player.pushFrames(frames);
+      }
+    });
+
+    child.stdout.on('end', () => {
+      // Parse any remaining data
+      if (parseOffset < buffer.length) {
+        const { frames } = extractOpusFramesIncremental(buffer, parseOffset);
+        if (frames.length > 0) {
+          player.pushFrames(frames);
+        }
+      }
+      player.markEnd();
+      console.log(`[VoiceConnection] Stream download complete for: ${url}`);
+    });
+
+    child.stderr.on('data', (data: Buffer) => {
+      const msg = data.toString().trim();
+      if (msg) {
+        console.log(`[yt-dlp] ${msg}`);
+      }
+    });
+
+    child.on('error', (err) => {
+      console.error(`[VoiceConnection] yt-dlp error: ${err.message}`);
+      player.markEnd();
+    });
+  }
+
+  /**
+   * Pauses the current playback.
+   */
+  public pause(): void {
+    this.player?.pause();
+  }
+
+  /**
+   * Resumes the current playback.
+   */
+  public resume(): void {
+    this.player?.resume();
+  }
+
+  /**
+   * Stops the current playback without leaving the channel.
+   */
+  public stopPlayer(): void {
+    this.player?.stop();
+    this.player = null;
   }
 
   /**

@@ -92,7 +92,7 @@ export class Formatters {
    * @returns The formatted string.
    */
   static codeBlock(content: string, language?: string): string {
-    return `\`\`\`${language ?? ""}\n${content}\n\`\`\``;
+    return `\`\`\`${language ?? ''}\n${content}\n\`\`\``;
   }
 
   /**
@@ -112,7 +112,7 @@ export class Formatters {
    * @returns The formatted string.
    */
   static hyperlink(text: string, url: string, title?: string): string {
-    return `[${text}](${url}${title ? ` "${title}"` : ""})`;
+    return `[${text}](${url}${title ? ` "${title}"` : ''})`;
   }
 
   /**
@@ -134,7 +134,8 @@ export class Formatters {
     if (!content) return '';
 
     const mentionRegex = /\[@\s*id="([^"]+)"\s+label="([^"]+)"(?:\s+type="([^"]+)")?\s*\]/g;
-    const commandRegex = /\[\s*\/\s*id="([^"]+)"\s+label="([^"]+)"\s+applicationId="([^"]+)"(?:\s+optionValues="([^"]+)")?\s*\]/g;
+    const commandRegex =
+      /\[\s*\/\s*id="([^"]+)"\s+label="([^"]+)"\s+applicationId="([^"]+)"(?:\s+optionValues="([^"]+)")?\s*\]/g;
 
     let result = content.replace(mentionRegex, '@$2');
 
@@ -155,6 +156,81 @@ export class Formatters {
       return `/${label}${optionsStr}`;
     });
 
-    return result;
+    return this.stripMarkdown(result);
+  }
+
+  /**
+   * Strips all Markdown formatting from content, returning plain text.
+   */
+  static stripMarkdown(content: string): string {
+    if (!content) return '';
+
+    let result = content;
+
+    // Code blocks ```lang\n...\n``` -> content only
+    result = result.replace(/```[\s\S]*?```/g, (match) => {
+      return match.replace(/```(?:\w*\n?)?/g, '').trim();
+    });
+
+    // Inline code `...` -> content only
+    result = result.replace(/`([^`]+)`/g, '$1');
+
+    // Images ![alt](url) -> alt text
+    result = result.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1');
+
+    // Hyperlinks [text](url) -> text only
+    result = result.replace(/\[([^\]]*)\]\([^)]+\)/g, '$1');
+
+    // Bold + italic ***text*** or ___text___
+    result = result.replace(/\*{3}(.+?)\*{3}/g, '$1');
+    result = result.replace(/_{3}(.+?)_{3}/g, '$1');
+
+    // Bold **text** or __text__
+    result = result.replace(/\*{2}(.+?)\*{2}/g, '$1');
+    result = result.replace(/_{2}(.+?)_{2}/g, '$1');
+
+    // Italic *text* or _text_
+    result = result.replace(/\*(.+?)\*/g, '$1');
+    result = result.replace(/_(.+?)_/g, '$1');
+
+    // Strikethrough ~~text~~
+    result = result.replace(/~~(.+?)~~/g, '$1');
+
+    // Spoiler ||text||
+    result = result.replace(/\|\|(.+?)\|\|/g, '$1');
+
+    // Block quotes >>> text -> text
+    result = result.replace(/^>{3}\s?/gm, '');
+
+    // Quotes > text -> text
+    result = result.replace(/^>\s?/gm, '');
+
+    return result.trim();
+  }
+
+  /**
+   * Extracts all URLs from content, including those hidden in Markdown links.
+   */
+  static extractUrls(content: string): string[] {
+    if (!content) return [];
+
+    const urls: string[] = [];
+
+    // Extract from Markdown links [text](url)
+    const mdLinkRegex = /\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+    let match: RegExpExecArray | null;
+    while ((match = mdLinkRegex.exec(content)) !== null) {
+      urls.push(match[1]);
+    }
+
+    // Extract plain URLs (not already captured)
+    const plainUrlRegex = /(?<!\]\()https?:\/\/[^\s)]+/g;
+    while ((match = plainUrlRegex.exec(content)) !== null) {
+      if (!urls.includes(match[0])) {
+        urls.push(match[0]);
+      }
+    }
+
+    return urls;
   }
 }
