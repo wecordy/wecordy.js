@@ -57,6 +57,43 @@ export class ChannelManager extends BaseManager<Channel> {
   }
 
   /**
+   * Updates a channel.
+   * @param channelId - The ID of the channel to edit
+   * @param serverId - The ID of the server the channel belongs to
+   * @param options - The new channel settings
+   */
+  async edit(channelId: string, serverId: string, options: {
+    name?: string;
+    topic?: string;
+    type?: string;
+    parent_id?: string;
+    user_limit?: number;
+    slow_mode?: number;
+  }): Promise<Channel> {
+    const data = await this.client.rest.put<APIChannel>(APIRoutes.updateChannel(), {
+      id: channelId,
+      server_id: serverId,
+      ...options,
+    });
+    return this._add(data);
+  }
+
+  /**
+   * Deletes a channel.
+   * @param channelId - The ID of the channel to delete
+   * @param serverId - The ID of the server the channel belongs to
+   */
+  async delete(channelId: string, serverId: string): Promise<void> {
+    await this.client.rest.delete(APIRoutes.deleteChannel(), {
+      data: {
+        id: channelId,
+        server_id: serverId,
+      },
+    });
+    this.cache.delete(channelId);
+  }
+
+  /**
    * Constructs a Channel instance from raw API data and adds it to the cache.
    */
   _add(channelOrData: Channel | APIChannel): Channel {

@@ -169,6 +169,28 @@ export class Channel extends Base {
   }
 
   /**
+   * Updates this channel.
+   * @param options - The new channel settings
+   */
+  async edit(options: {
+    name?: string;
+    topic?: string;
+    type?: ChannelTypeValue;
+    parent_id?: string;
+    user_limit?: number;
+    slow_mode?: number;
+  }): Promise<Channel> {
+    return this.client.channels.edit(this.id, this.serverId, options);
+  }
+
+  /**
+   * Deletes this channel.
+   */
+  async delete(): Promise<void> {
+    await this.client.channels.delete(this.id, this.serverId);
+  }
+
+  /**
    * Updates this channel with new data.
    */
   _patch(data: Partial<APIChannel>): Channel {

@@ -52,10 +52,10 @@ export const APIRoutes = {
   createChannel: () => `/v1/channel` as const,
   /** GET - Get a specific channel */
   channel: (channelId: string) => `/v1/channel/${channelId}` as const,
-  /** PATCH - Update a channel */
-  updateChannel: (channelId: string) => `/v1/channel/${channelId}` as const,
+  /** PUT - Update a channel */
+  updateChannel: () => `/v1/channel` as const,
   /** DELETE - Delete a channel */
-  deleteChannel: (channelId: string) => `/v1/channel/${channelId}` as const,
+  deleteChannel: () => `/v1/channel` as const,
   /** POST - Join voice channel */
   joinVoiceChannel: () => `/v1/channel/join` as const,
   /** POST - Disconnect voice channel */
