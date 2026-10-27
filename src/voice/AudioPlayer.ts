@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import { ChildProcess } from 'child_process';
-import { MediaStreamTrack, RtpPacket, RtpHeader } from 'werift';
+import { EventEmitter } from 'eventemitter3';
+import { MediaStreamTrack } from 'werift';
 
 // WebM EBML element IDs
 const SIMPLE_BLOCK_ID = 0xa3;
@@ -127,10 +128,26 @@ export function extractOpusFramesIncremental(
 }
 
 /**
+ * Events emitted by an AudioPlayer.
+ */
+export interface AudioPlayerEvents {
+  /** Playback started */
+  start: [];
+  /** All frames were played (natural end of the track) */
+  finish: [];
+  /** Playback was stopped, either manually or at the end of the track (right before `finish`) */
+  stop: [];
+  /** The audio source failed (e.g. yt-dlp is not installed) */
+  error: [error: Error];
+  /** Debug information */
+  debug: [message: string];
+}
+
+/**
  * AudioPlayer — plays Opus frames over a WebRTC track at 20ms intervals.
  * Supports both batch mode (from file/buffer) and streaming mode.
  */
-export class AudioPlayer {
+export class AudioPlayer extends EventEmitter<AudioPlayerEvents> {
   private readonly track: MediaStreamTrack;
   private readonly source: string;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -145,6 +162,7 @@ export class AudioPlayer {
   private sourceProcess: ChildProcess | null = null;
 
   constructor(track: MediaStreamTrack, source: string) {
+    super();
     this.track = track;
     this.source = source;
     this.ssrc = (Math.random() * 0xffffffff) >>> 0;
@@ -207,7 +225,8 @@ export class AudioPlayer {
     this.sequenceNumber = (Math.random() * 0xffff) >>> 0;
     this.timestamp = (Math.random() * 0xffffffff) >>> 0;
 
-    console.log(`[AudioPlayer] Starting playback: ${this.source}`);
+    this.emit('debug', `[AudioPlayer] Starting playback: ${this.source}`);
+    this.emit('start');
 
     this.timer = setInterval(() => {
       if (!this.isPlaying) {
@@ -222,8 +241,9 @@ export class AudioPlayer {
       if (this.frameIndex >= this.frames.length) {
         if (this.streamEnded) {
           // Stream is done and all frames played
-          console.log(`[AudioPlayer] Finished playing ${this.source} (${this.frames.length} frames)`);
+          this.emit('debug', `[AudioPlayer] Finished playing ${this.source} (${this.frames.length} frames)`);
           this.stop();
+          this.emit('finish');
         }
         // else: still streaming, wait for more frames
         return;
@@ -265,6 +285,7 @@ export class AudioPlayer {
    * Stops the playback and cleans up resources.
    */
   public stop(): void {
+    const wasPlaying = this.isPlaying;
     this.isPlaying = false;
     this.isPaused = false;
 
@@ -280,6 +301,22 @@ export class AudioPlayer {
     this.frames = [];
     this.frameIndex = 0;
     this.streamEnded = false;
+
+    if (wasPlaying) this.emit('stop');
+  }
+
+  /**
+   * Whether the player is currently playing (paused counts as playing).
+   */
+  public get playing(): boolean {
+    return this.isPlaying;
+  }
+
+  /**
+   * Whether the playback is paused.
+   */
+  public get paused(): boolean {
+    return this.isPaused;
   }
 
   /**

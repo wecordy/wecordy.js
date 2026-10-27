@@ -21,8 +21,11 @@ export class ServerInvite extends Base {
   /** The populated Server model, if available */
   public server: Server | null = null;
 
-  /** The unique code/URL of the invite */
+  /** The unique code of the invite */
   public code: string;
+
+  /** The invite URL as stored by the backend */
+  private readonly inviteURL: string;
 
   /** When this invite expires, if ever */
   public expiresAt: Date | null;
@@ -42,7 +45,9 @@ export class ServerInvite extends Base {
       this.serverId = this.server.id;
     }
 
-    this.code = data.url; // Backend stores the full URL or just the code? Model says 'url'
+    // The backend stores the full invite URL (`<app url>/invite/<code>`) in the `url` field
+    this.inviteURL = data.url ?? '';
+    this.code = this.inviteURL.split('/').filter(Boolean).pop() ?? '';
     this.expiresAt = data.expire ? new Date(data.expire) : null;
     this.createdAt = new Date(data.created_at);
   }
@@ -51,9 +56,7 @@ export class ServerInvite extends Base {
    * The full invite URL.
    */
   url(): string {
-    // Assuming the backend 'url' field is just the code, but let's be safe.
-    // If it's already a URL, return it. If not, construct it.
-    if (this.code.startsWith('http')) return this.code;
+    if (this.inviteURL.startsWith('http')) return this.inviteURL;
     return `https://wecordy.com/invite/${this.code}`;
   }
 
@@ -62,7 +65,7 @@ export class ServerInvite extends Base {
       id: this.id,
       serverId: this.serverId,
       code: this.code,
-      url: this.url,
+      url: this.url(),
       expiresAt: this.expiresAt?.toISOString() ?? null,
       createdAt: this.createdAt.toISOString(),
     };

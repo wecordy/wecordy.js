@@ -2,6 +2,7 @@ import { RTCPeerConnection, MediaStreamTrack, RTCSessionDescription } from 'weri
 import { spawn } from 'child_process';
 import type { Client } from '../client/Client';
 import { APIRoutes } from '../rest/APIRoutes';
+import { Events } from '../util/Events';
 import { AudioPlayer, extractOpusFramesIncremental } from './AudioPlayer';
 
 export interface VoiceConnectionOptions {
@@ -30,7 +31,15 @@ export class VoiceConnection {
   }
 
   /**
+   * The current audio player, if something is playing.
+   */
+  public get audioPlayer(): AudioPlayer | null {
+    return this.player;
+  }
+
+  /**
    * Establishes the voice connection.
+   * If any step fails, the bot leaves the voice channel again before the error is thrown.
    */
   public async connect(): Promise<this> {
     // 1. Join the voice channel via API
@@ -38,62 +47,64 @@ export class VoiceConnection {
       channel_id: this.channelId,
     });
 
-    // 2. Create Cloudflare Session
-    const sessionResponse = await this.client.rest.post<any>(APIRoutes.cloudflareSession(), {});
-    this.sessionId = sessionResponse.sessionId;
+    try {
+      // 2. Create Cloudflare Session
+      const sessionResponse = await this.client.rest.post<any>(APIRoutes.cloudflareSession(), {});
+      this.sessionId = sessionResponse?.sessionId ?? null;
+      if (!this.sessionId) {
+        throw new Error('Failed to create a media session.');
+      }
 
-    // 3. Initialize PeerConnection
-    this.peerConnection = new RTCPeerConnection({
-      bundlePolicy: 'max-bundle',
-    });
+      // 3. Initialize PeerConnection
+      this.peerConnection = new RTCPeerConnection({
+        bundlePolicy: 'max-bundle',
+      });
 
-    // 4. Create Audio Track (for sending)
-    this.audioTrack = new MediaStreamTrack({ kind: 'audio' });
-    if (!this.audioTrack.id) {
-      this.audioTrack.id = this.audioTrack.uuid;
-    }
-    const transceiver = this.peerConnection.addTransceiver(this.audioTrack, {
-      direction: 'sendonly',
-    });
+      // 4. Create Audio Track (for sending)
+      this.audioTrack = new MediaStreamTrack({ kind: 'audio' });
+      if (!this.audioTrack.id) {
+        this.audioTrack.id = this.audioTrack.uuid;
+      }
+      const transceiver = this.peerConnection.addTransceiver(this.audioTrack, {
+        direction: 'sendonly',
+      });
 
-    // 5. Create Offer
-    const offer = await this.peerConnection.createOffer();
-    await this.peerConnection.setLocalDescription(offer);
+      // 5. Create Offer
+      const offer = await this.peerConnection.createOffer();
+      await this.peerConnection.setLocalDescription(offer);
 
-    // 6. Send Tracks to Cloudflare
-    const tracks = [
-      {
-        location: 'local',
-        mid: transceiver.mid,
-        trackName: this.audioTrack.id,
-      },
-    ];
-
-    const newTracksResult = await this.client.rest.post<any>(APIRoutes.cloudflareNewTracks(), {
-      tracks,
-      offer_sdp: this.peerConnection.localDescription!.sdp,
-      session_id: this.sessionId,
-    });
-
-    // 7. Set Remote Description (Answer)
-    await this.peerConnection.setRemoteDescription(
-      new RTCSessionDescription(newTracksResult.sessionDescription.sdp, newTracksResult.sessionDescription.type),
-    );
-
-    // 8. Register tracks with the channel service
-    await this.client.rest.post(APIRoutes.addTracks(), {
-      channel_id: this.channelId,
-      session_id: this.sessionId,
-      tracks: [
+      // 6. Send Tracks to Cloudflare
+      const tracks = [
         {
           location: 'local',
           mid: transceiver.mid,
           trackName: this.audioTrack.id,
         },
-      ],
-    });
+      ];
 
-    console.log(`[VoiceConnection] Connected to channel ${this.channelId}`);
+      const newTracksResult = await this.client.rest.post<any>(APIRoutes.cloudflareNewTracks(), {
+        tracks,
+        offer_sdp: this.peerConnection.localDescription!.sdp,
+        session_id: this.sessionId,
+      });
+
+      // 7. Set Remote Description (Answer)
+      await this.peerConnection.setRemoteDescription(
+        new RTCSessionDescription(newTracksResult.sessionDescription.sdp, newTracksResult.sessionDescription.type),
+      );
+
+      // 8. Register tracks with the channel service
+      await this.client.rest.post(APIRoutes.addTracks(), {
+        channel_id: this.channelId,
+        session_id: this.sessionId,
+        tracks,
+      });
+    } catch (error) {
+      await this.disconnect().catch(() => {});
+      throw error;
+    }
+
+    this.client.emit(Events.Debug, `[VoiceConnection] Connected to channel ${this.channelId}`);
 
     // Register in client's connections
     this.client.voiceConnections.set(this.channelId, this);
@@ -114,7 +125,7 @@ export class VoiceConnection {
       this.player.stop();
     }
 
-    this.player = AudioPlayer.fromFile(this.audioTrack, filePath);
+    this.player = this.attachPlayer(AudioPlayer.fromFile(this.audioTrack, filePath));
     this.player.start();
     return this.player;
   }
@@ -134,15 +145,23 @@ export class VoiceConnection {
       this.player.stop();
     }
 
-    console.log(`[VoiceConnection] Streaming audio from: ${url}`);
+    this.client.emit(Events.Debug, `[VoiceConnection] Streaming audio from: ${url}`);
 
-    this.player = AudioPlayer.createStream(this.audioTrack, url);
+    this.player = this.attachPlayer(AudioPlayer.createStream(this.audioTrack, url));
     this.player.start();
 
     // Spawn yt-dlp and pipe stdout through incremental WebM parser
     this.streamYouTubeAudio(url, this.player);
 
     return this.player;
+  }
+
+  /**
+   * Forwards the debug output of a player to the client.
+   */
+  private attachPlayer(player: AudioPlayer): AudioPlayer {
+    player.on('debug', (message) => this.client.emit(Events.Debug, message));
+    return player;
   }
 
   /**
@@ -178,18 +197,20 @@ export class VoiceConnection {
         }
       }
       player.markEnd();
-      console.log(`[VoiceConnection] Stream download complete for: ${url}`);
+      this.client.emit(Events.Debug, `[VoiceConnection] Stream download complete for: ${url}`);
     });
 
     child.stderr.on('data', (data: Buffer) => {
       const msg = data.toString().trim();
       if (msg) {
-        console.log(`[yt-dlp] ${msg}`);
+        this.client.emit(Events.Debug, `[yt-dlp] ${msg}`);
       }
     });
 
     child.on('error', (err) => {
-      console.error(`[VoiceConnection] yt-dlp error: ${err.message}`);
+      const error = new Error(`yt-dlp failed: ${err.message}. Make sure yt-dlp is installed and on the PATH.`);
+      this.client.emit(Events.Error, error);
+      player.emit('error', error);
       player.markEnd();
     });
   }
@@ -222,21 +243,24 @@ export class VoiceConnection {
   public async disconnect(): Promise<void> {
     if (this.player) {
       this.player.stop();
+      this.player = null;
     }
 
     if (this.peerConnection) {
-      this.peerConnection.close();
+      await this.peerConnection.close().catch(() => {});
       this.peerConnection = null;
     }
+
+    // Unregister from client's connections, even if the API call below fails
+    if (this.client.voiceConnections.get(this.channelId) === this) {
+      this.client.voiceConnections.delete(this.channelId);
+    }
+
+    this.sessionId = null;
+    this.audioTrack = null;
 
     await this.client.rest.post(APIRoutes.disconnectVoiceChannel(), {
       channel_id: this.channelId,
     });
-
-    // Unregister from client's connections
-    this.client.voiceConnections.delete(this.channelId);
-
-    this.sessionId = null;
-    this.audioTrack = null;
   }
 }

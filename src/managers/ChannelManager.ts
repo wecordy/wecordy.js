@@ -2,6 +2,29 @@ import { BaseManager } from './BaseManager';
 import { Channel, type APIChannel } from '../structures/Channel';
 import { APIRoutes } from '../rest/APIRoutes';
 import type { Client } from '../client/Client';
+import type { ChannelTypeValue } from '../util/Constants';
+
+/**
+ * Options for creating a channel.
+ */
+export interface ChannelCreateOptions {
+  name: string;
+  type: ChannelTypeValue;
+  parent_id?: string | null;
+  user_limit?: number;
+  slow_mode?: number;
+}
+
+/**
+ * Options for editing a channel. The channel type can't be changed.
+ */
+export interface ChannelEditOptions {
+  name?: string;
+  topic?: string;
+  parent_id?: string | null;
+  user_limit?: number;
+  slow_mode?: number;
+}
 
 /**
  * Manages channels across all servers.
@@ -33,7 +56,7 @@ export class ChannelManager extends BaseManager<Channel> {
    */
   async fetchServerChannels(serverId: string): Promise<Channel[]> {
     const data = await this.client.rest.get<APIChannel[]>(APIRoutes.serverChannels(serverId));
-    return data.map((ch) => this._add(ch));
+    return (data ?? []).map((ch) => this._add(ch));
   }
 
   /**
@@ -41,14 +64,7 @@ export class ChannelManager extends BaseManager<Channel> {
    * @param serverId - The server ID
    * @param options - Channel creation options
    */
-  async create(serverId: string, options: {
-    name: string;
-    type?: string;
-    topic?: string;
-    parent_id?: string;
-    user_limit?: number;
-    slow_mode?: number;
-  }): Promise<Channel> {
+  async create(serverId: string, options: ChannelCreateOptions): Promise<Channel> {
     const data = await this.client.rest.post<APIChannel>(APIRoutes.createChannel(), {
       server_id: serverId,
       ...options,
@@ -57,25 +73,24 @@ export class ChannelManager extends BaseManager<Channel> {
   }
 
   /**
-   * Updates a channel.
+   * Updates a channel and returns the refreshed channel.
    * @param channelId - The ID of the channel to edit
    * @param serverId - The ID of the server the channel belongs to
    * @param options - The new channel settings
    */
-  async edit(channelId: string, serverId: string, options: {
-    name?: string;
-    topic?: string;
-    type?: string;
-    parent_id?: string;
-    user_limit?: number;
-    slow_mode?: number;
-  }): Promise<Channel> {
-    const data = await this.client.rest.put<APIChannel>(APIRoutes.updateChannel(), {
+  async edit(channelId: string, serverId: string, options: ChannelEditOptions): Promise<Channel> {
+    // The backend requires the name on every update
+    const name = options.name ?? (await this.fetch(channelId)).name;
+
+    await this.client.rest.put(APIRoutes.updateChannel(), {
+      ...options,
       id: channelId,
       server_id: serverId,
-      ...options,
+      name,
     });
-    return this._add(data);
+
+    // The update endpoint doesn't return the channel
+    return this.fetch(channelId, true);
   }
 
   /**
@@ -90,16 +105,23 @@ export class ChannelManager extends BaseManager<Channel> {
         server_id: serverId,
       },
     });
-    this.cache.delete(channelId);
+    this._remove(channelId);
   }
 
   /**
-   * Constructs a Channel instance from raw API data and adds it to the cache.
+   * Adds a Channel instance to the cache, or constructs one from raw API data.
+   * Raw data for an already cached channel updates the cached instance instead of replacing it.
    */
   _add(channelOrData: Channel | APIChannel): Channel {
-    const channel = channelOrData instanceof Channel
-      ? channelOrData
-      : new Channel(this.client, channelOrData);
+    if (channelOrData instanceof Channel) {
+      this.cache.set(channelOrData.id, channelOrData);
+      return channelOrData;
+    }
+
+    const existing = this.cache.get(channelOrData.id);
+    if (existing) return existing._patch(channelOrData);
+
+    const channel = new Channel(this.client, channelOrData);
     this.cache.set(channel.id, channel);
     return channel;
   }

@@ -1,8 +1,11 @@
 import type { APIUser } from '../structures/User';
 import type { APIChannel } from '../structures/Channel';
+import type { APIRole } from '../structures/Role';
 
 /**
  * Payload for message reaction events.
+ * For channel reactions `user_id` is the reacting user; for DM reactions it is the message author
+ * and the reacting user is `user`.
  */
 export interface MessageReactionPayload {
   message_id: string;
@@ -25,11 +28,55 @@ export interface VoiceStatePayload {
 }
 
 /**
- * Payload for typing indicators.
+ * Payload for typing indicators. `channel_id` is only sent when a user starts typing in a channel.
  */
 export interface TypingPayload {
   user: APIUser;
   channel_id?: string;
+}
+
+/**
+ * Payload for unpinned messages.
+ */
+export interface MessageUnpinPayload {
+  channel_id: string;
+  message_id: string;
+}
+
+/**
+ * Payload for removed server members that are not cached.
+ * The backend doesn't include the server ID in this event.
+ */
+export interface MemberRemovePayload {
+  user_id: string;
+}
+
+/**
+ * Payload for servers that are not cached when the bot leaves or is removed from them.
+ */
+export interface ServerRemovePayload {
+  id: string;
+}
+
+/**
+ * Payload for role assignments.
+ */
+export interface RoleAssignedPayload {
+  id: string;
+  server_id: string;
+  user_id: string | APIUser;
+  role_id: string | APIRole;
+  assigned_by?: string;
+  created_at?: string;
+}
+
+/**
+ * Payload for role removals.
+ */
+export interface RoleRemovedPayload {
+  server_id: string;
+  user_id: string;
+  role_id: string;
 }
 
 /**
@@ -106,5 +153,6 @@ export interface ChannelPositionPayload {
  */
 export interface PermissionUpdatePayload {
   server_id: string;
-  role_id: string;
+  /** Omitted when a user specific channel permission changed */
+  role_id?: string;
 }

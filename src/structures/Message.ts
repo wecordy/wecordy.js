@@ -6,6 +6,7 @@ import type { Server, APIServer } from './Server';
 import { MessageReaction, type APIMessageReaction } from './MessageReaction';
 import { Collection } from '../util/Collection';
 import { Formatters } from '../util/Formatters';
+import type { MessageCreateOptions } from '../managers/MessageManager';
 
 export interface APIMessageAttachment {
   url: string;
@@ -58,8 +59,11 @@ export class Message extends Base {
   /** The ID of the forum post this message belongs to, if applicable */
   public forumPostId: string | null = null;
 
-  /** The message text content */
+  /** The message text content (mentions resolved to labels, Markdown stripped) */
   public content: string;
+
+  /** The raw message text as stored by the backend (mention tags and Markdown intact) */
+  public rawContent: string;
 
   /** The ID of the message this is a reply to, if applicable */
   public replyToMessageId: string | null = null;
@@ -87,6 +91,9 @@ export class Message extends Base {
 
   /** The reactions on this message */
   public reactions: Collection<string, MessageReaction>;
+
+  /** Whether this message is a direct message (resolved from the raw payload) */
+  private readonly directMessage: boolean;
 
   constructor(client: Client, data: APIMessage) {
     super(client, data.id);
@@ -121,6 +128,7 @@ export class Message extends Base {
     }
 
     this.forumPostId = data.forum_post_id ?? null;
+    this.rawContent = data.text ?? '';
     this.content = Formatters.cleanContent(data.text);
 
     // reply_to_message_id -> replyToMessageId & replyToMessage
@@ -146,6 +154,12 @@ export class Message extends Base {
       this.serverId = this.server.id;
     }
 
+    // REST responses don't include server_id, fall back to the (cached) channel's server
+    if (!this.serverId && this.channelId) {
+      const channel = this.channel ?? this.client.channels.cache.get(this.channelId);
+      this.serverId = channel?.serverId ?? null;
+    }
+
     this.reactions = new Collection();
     if (data.reactions) {
       for (const reactionData of data.reactions) {
@@ -153,8 +167,12 @@ export class Message extends Base {
       }
     }
 
+    // DMs have a recipient and no channel/forum post. server_id is not a reliable signal:
+    // REST responses for channel messages don't include it.
+    this.directMessage = !!this.toUserId && !this.channelId && !this.forumPostId;
+
     // Polyfill channelId for DMs: if no channelId, but this is a DM, use the other user's ID
-    if (!this.channelId && this.isDM()) {
+    if (!this.channelId && this.directMessage) {
       this.channelId = this.isOwnMessage() ? this.toUserId : this.userId;
     }
   }
@@ -170,21 +188,29 @@ export class Message extends Base {
    * Whether this message is a direct message.
    */
   isDM(): boolean {
-    return (!!this.toUserId || !this.serverId) && !this.forumPostId;
+    return this.directMessage;
+  }
+
+  /**
+   * The ID of the DM partner (the user on the other side of the conversation).
+   */
+  private dmTargetId(): string | null {
+    return this.isOwnMessage() ? this.toUserId : this.userId;
   }
 
   /**
    * Replies to this message in the same channel.
-   * @param content - The reply text
+   * @param content - The reply text or message options
    */
-  async reply(content: string): Promise<Message> {
-    const options = {
-      text: content,
+  async reply(content: string | Omit<MessageCreateOptions, 'reply_to_message_id'>): Promise<Message> {
+    const options: MessageCreateOptions = {
+      ...(typeof content === 'string' ? { text: content } : content),
       reply_to_message_id: this.id,
     };
+    if (this.forumPostId) options.forum_post_id = this.forumPostId;
 
     if (this.isDM()) {
-      const targetId = this.isOwnMessage() ? this.toUserId : this.userId;
+      const targetId = this.dmTargetId();
       if (!targetId) throw new Error('Cannot reply to a DM without a recipient ID.');
       return this.client.messages._sendDM(targetId, options);
     }
@@ -200,7 +226,9 @@ export class Message extends Base {
    * @param newContent - The new text content
    */
   async edit(newContent: string): Promise<Message> {
-    return this.client.messages.edit(this.id, newContent);
+    await this.client.messages.edit(this.id, newContent);
+    // The backend doesn't return the edited message, so the local copy is updated
+    return this._patch({ text: newContent, edited_at: new Date().toISOString() });
   }
 
   /**
@@ -233,10 +261,33 @@ export class Message extends Base {
   }
 
   /**
+   * Pins this message in its channel.
+   */
+  async pin(): Promise<void> {
+    if (this.isDM() || !this.channelId) {
+      throw new Error('Only channel messages can be pinned.');
+    }
+    await this.client.messages.pin(this.channelId, this.id);
+  }
+
+  /**
+   * Unpins this message from its channel.
+   */
+  async unpin(): Promise<void> {
+    if (this.isDM() || !this.channelId) {
+      throw new Error('Only channel messages can be unpinned.');
+    }
+    await this.client.messages.unpin(this.channelId, this.id);
+  }
+
+  /**
    * Updates this message with new data.
    */
   _patch(data: Partial<APIMessage>): Message {
-    if (data.text !== undefined) this.content = Formatters.cleanContent(data.text);
+    if (data.text !== undefined) {
+      this.rawContent = data.text ?? '';
+      this.content = Formatters.cleanContent(data.text);
+    }
 
     if (data.user_id !== undefined) {
       if (typeof data.user_id === 'string' || !data.user_id) {
@@ -308,6 +359,7 @@ export class Message extends Base {
       channelId: this.channelId,
       serverId: this.serverId,
       content: this.content,
+      rawContent: this.rawContent,
       pinned: this.pinned,
       attachments: this.attachments,
       replyToMessageId: this.replyToMessageId,

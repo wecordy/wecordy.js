@@ -17,8 +17,9 @@ import { Member } from '../structures/Member';
 import { Role } from '../structures/Role';
 import { Interaction, CommandInteraction } from '../structures/Interaction';
 import { Events } from '../util/Events';
-import { TokenError, WebSocketError } from '../errors';
+import { TokenError, ValidationError, WebSocketError } from '../errors';
 import { Collection } from '../util/Collection';
+import { GatewayIntentBits, type GatewayIntentName } from '../util/Constants';
 import type { VoiceConnection } from '../voice/VoiceConnection';
 import type {
   MessageReactionPayload,
@@ -29,23 +30,39 @@ import type {
   FriendshipPayload,
   ChannelPositionPayload,
   PermissionUpdatePayload,
+  MessageUnpinPayload,
+  MemberRemovePayload,
+  ServerRemovePayload,
+  RoleAssignedPayload,
+  RoleRemovedPayload,
 } from '../types/GatewayPayloads';
 
 /**
  * Configuration options for the Client.
  */
 export interface ClientOptions {
-  /** Intents control which events the bot receives (future use) */
-  intents?: string[];
+  /**
+   * Intents sent to the gateway. `Servers` is required to receive server scoped events
+   * such as channel messages. Unknown intent names are rejected by the gateway.
+   */
+  intents?: Array<GatewayIntentName | string>;
 
   /** REST API options */
   rest?: RESTOptions;
 
-  /** WebSocket gateway URL (default: ws://localhost:3001) */
+  /** WebSocket gateway URL (default: wss://gateway.wecordy.com) */
   wsURL?: string;
 
-  /** Heartbeat interval in ms (default: 30000) */
+  /**
+   * @deprecated Socket.IO handles heartbeats internally; this option has no effect.
+   */
   heartbeatInterval?: number;
+
+  /** Maximum number of messages kept in the message cache (default: 500) */
+  messageCacheMaxSize?: number;
+
+  /** Whether to fetch the servers the bot is in during login (default: true) */
+  fetchServersOnLogin?: boolean;
 }
 
 /**
@@ -74,32 +91,38 @@ export interface ClientEvents {
 
   [Events.ChannelCreate]: [channel: Channel];
   [Events.ChannelUpdate]: [oldChannel: Channel | null, newChannel: Channel];
-  [Events.ChannelDelete]: [channel: Channel | any];
+  [Events.ChannelDelete]: [channel: Channel];
   [Events.ChannelPositionsUpdate]: [data: ChannelPositionPayload[]];
   [Events.ChannelEvent]: [data: any];
   [Events.MessagePin]: [message: Message];
-  [Events.MessageUnpin]: [message: Message];
+  /** The cached message, or the raw payload if the message isn't cached */
+  [Events.MessageUnpin]: [message: Message | MessageUnpinPayload];
 
   [Events.ServerCreate]: [server: Server];
   [Events.ServerUpdate]: [oldServer: Server | null, newServer: Server];
-  [Events.ServerDelete]: [server: Server | any];
+  /** The cached server, or only its ID if the server isn't cached */
+  [Events.ServerDelete]: [server: Server | ServerRemovePayload];
 
   [Events.ServerMemberAdd]: [member: Member];
   [Events.ServerMemberUpdate]: [oldMember: Member | null, newMember: Member];
-  [Events.ServerMemberRemove]: [member: Member | any];
+  /** The cached member, or only the user ID if the member can't be resolved */
+  [Events.ServerMemberRemove]: [member: Member | MemberRemovePayload];
 
   [Events.RoleCreate]: [role: Role];
   [Events.RoleUpdate]: [oldRole: Role | null, newRole: Role];
-  [Events.RoleDelete]: [role: Role | any];
-  [Events.RoleAssigned]: [data: any]; // APIServerMemberRole
-  [Events.RoleRemoved]: [data: { server_id: string; user_id: string; role_id: string }];
+  /** The cached role, or only its ID if the role isn't cached */
+  [Events.RoleDelete]: [role: Role | { id: string }];
+  [Events.RoleAssigned]: [data: RoleAssignedPayload];
+  [Events.RoleRemoved]: [data: RoleRemovedPayload];
 
   [Events.InteractionCreate]: [interaction: Interaction | CommandInteraction];
+  [Events.ApplicationCommandsUpdate]: [data: any];
   [Events.UserUpdate]: [oldUser: User | null, newUser: User];
 
   [Events.VoiceChannelJoin]: [data: VoiceStatePayload];
   [Events.VoiceChannelDisconnect]: [data: VoiceStatePayload];
   [Events.VoiceChannelMove]: [data: VoiceStatePayload];
+  [Events.VoiceStateUpdate]: [data: any];
 
   [Events.ServerBanAdd]: [data: BanPayload];
   [Events.ServerBanRemove]: [data: BanPayload];
@@ -124,8 +147,8 @@ export interface ClientEvents {
   [Events.Debug]: [message: string];
   [Events.Warn]: [message: string];
   [Events.Error]: [error: Error | WebSocketError];
-  [Events.ShardReady]: [data: any];
-  [Events.ShardReconnecting]: [data: any];
+  [Events.ShardReady]: [data: unknown];
+  [Events.ShardReconnecting]: [data: { attempt: number }];
   [Events.ShardDisconnect]: [data: { code: number; reason: string }];
 }
 
@@ -181,6 +204,16 @@ export class Client extends EventEmitter<ClientEvents> {
     super();
     this.options = options;
 
+    // Fail early on intents the gateway would reject
+    const validIntents = Object.values(GatewayIntentBits) as string[];
+    const invalidIntents = (options.intents ?? []).filter((intent) => !validIntents.includes(intent));
+    if (invalidIntents.length > 0) {
+      throw new ValidationError(
+        'intents',
+        `Unknown intent(s): ${invalidIntents.join(', ')}. Valid intents: ${validIntents.join(', ')}.`,
+      );
+    }
+
     // Initialize REST client
     this.rest = new RESTClient(options.rest);
 
@@ -194,12 +227,6 @@ export class Client extends EventEmitter<ClientEvents> {
     this.users = new UserManager(this);
     this.roles = new RoleManager(this);
     this.members = new MemberManager(this);
-
-    // Listen for ready event to set state
-    this.on(Events.ClientReady, () => {
-      this.isReady = true;
-      this.readyAt = new Date();
-    });
   }
 
   /**
@@ -208,13 +235,18 @@ export class Client extends EventEmitter<ClientEvents> {
    * This method:
    * 1. Sets the token on the REST client
    * 2. Fetches the bot's own user info to validate the token
-   * 3. Connects to the WebSocket gateway
+   * 3. Fetches the servers the bot is in
+   * 4. Connects to the WebSocket gateway
+   * 5. Emits `ready` (also when the gateway is unreachable; the bot then works with the REST API only)
    *
    * @param token - The bot token (from Application settings)
    */
   async login(token: string): Promise<void> {
     if (!token || typeof token !== 'string') {
       throw new TokenError('A valid bot token must be provided.');
+    }
+    if (this.isReady) {
+      throw new WebSocketError('The client is already logged in. Call destroy() before logging in again.');
     }
 
     this.token = token;
@@ -231,18 +263,43 @@ export class Client extends EventEmitter<ClientEvents> {
       this.emit(Events.Debug, `[Client] Authenticated as ${this.user.username} (${this.user.id})`);
 
       // Fetch the actual application for the bot
-      const appData = await this.rest.get<any>(APIRoutes.currentApplication());
+      const appData = await this.rest.get<{ id?: string; _id?: string }>(APIRoutes.currentApplication());
+      const applicationId = appData?.id ?? appData?._id;
+      if (!applicationId) {
+        throw new Error('The API did not return the application of this bot.');
+      }
 
       // Set up application with command manager using the real application ID
       this.application = {
-        id: appData._id || appData.id,
-        commands: new ApplicationCommandManager(this, appData._id || appData.id),
+        id: applicationId,
+        commands: new ApplicationCommandManager(this, applicationId),
       };
     } catch (error) {
+      this.token = null;
       throw new TokenError(`Failed to validate token: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
-    // Step 2: Connect to WebSocket gateway
+    // Step 2: Fill the server cache
+    if (this.options.fetchServersOnLogin !== false) {
+      try {
+        const servers = await this.servers.fetchAll();
+        this.emit(Events.Debug, `[Client] Cached ${servers.length} server(s)`);
+      } catch (error) {
+        this.emit(
+          Events.Warn,
+          `[Client] Failed to fetch servers: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
+      }
+    }
+
+    // Step 3: Connect to WebSocket gateway
+    if (!this.options.intents?.includes(GatewayIntentBits.Servers)) {
+      this.emit(
+        Events.Warn,
+        '[Client] The "Servers" intent is not set. The bot will not receive server events such as channel messages.',
+      );
+    }
+
     this.emit(Events.Debug, '[Client] Connecting to WebSocket gateway...');
     try {
       await this.ws.connect(token);
@@ -252,6 +309,11 @@ export class Client extends EventEmitter<ClientEvents> {
         `[Client] WebSocket connection failed: ${error instanceof Error ? error.message : 'Unknown error'}. The bot will still work with REST API only.`,
       );
     }
+
+    // Step 4: Ready (emitted once per login, reconnects emit ShardReady instead)
+    this.isReady = true;
+    this.readyAt = new Date();
+    this.emit(Events.ClientReady, this);
   }
 
   /**
@@ -262,7 +324,7 @@ export class Client extends EventEmitter<ClientEvents> {
 
     // Disconnect WebSocket
     this.ws.disconnect();
-    
+
     // Disconnect all voice connections
     for (const connection of this.voiceConnections.values()) {
       connection.disconnect().catch(() => {});

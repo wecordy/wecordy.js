@@ -1,6 +1,8 @@
 /**
  * Gateway opcodes used in the WebSocket protocol between bot and backend.
- * Mirrors the backend's socket message structure.
+ *
+ * @deprecated The Wecordy gateway is Socket.IO based and does not use opcodes.
+ * Kept only for backwards compatibility.
  */
 export const GatewayOpcodes = {
   /** Server dispatches an event */
@@ -188,16 +190,24 @@ export const GatewayEvents = {
   FORUM_POST_REACTION_ADD: 'FORUM_POST_REACTION_ADD',
   FORUM_POST_REACTION_REMOVE: 'FORUM_POST_REACTION_REMOVE',
   INTERACTION_CREATE: 'INTERACTION_CREATE',
-  APPLICATION_COMMAND_CREATE: 'APPLICATION_COMMAND_CREATE',
-  APPLICATION_COMMAND_UPDATE: 'APPLICATION_COMMAND_UPDATE',
-  APPLICATION_COMMAND_DELETE: 'APPLICATION_COMMAND_DELETE',
+  APPLICATION_COMMANDS_UPDATE: 'APPLICATION_COMMANDS_UPDATE',
+  VOICE_STATE_UPDATE: 'VOICE_STATE_UPDATE',
+  LOG_RELAY_DONE: 'LOG_RELAY_DONE',
+  /** Sent by the gateway itself when a socket joins its rooms */
+  JOIN: 'JOIN',
+  /** Sent by the gateway itself on connection */
+  CLOSE: 'CLOSE',
 } as const;
 
 export type GatewayEventName = (typeof GatewayEvents)[keyof typeof GatewayEvents];
 
 /**
- * Bitwise or string-based gateway intents.
- * Standardized constants to avoid magic strings in client initialization.
+ * String-based gateway intents, validated by the backend during authentication.
+ * An unknown intent name makes the gateway reject the connection.
+ *
+ * Note: `Servers` is required to receive server scoped events (channel messages,
+ * channel/role/member updates, etc.). Without it the bot only receives interactions
+ * and events addressed to the bot user directly.
  */
 export const GatewayIntentBits = {
   Servers: 'Servers',
@@ -218,6 +228,8 @@ export const GatewayIntentBits = {
   MessageContent: 'MessageContent',
 } as const;
 
+export type GatewayIntentName = (typeof GatewayIntentBits)[keyof typeof GatewayIntentBits];
+
 /**
  * Default API version and base configuration.
  */
@@ -225,8 +237,11 @@ export const APIConstants = {
   API_VERSION: 'v1',
   DEFAULT_API_BASE: 'https://gateway.wecordy.com/api',
   DEFAULT_WS_BASE: 'wss://gateway.wecordy.com',
+  /** @deprecated Socket.IO handles heartbeats internally */
   DEFAULT_HEARTBEAT_INTERVAL: 30000,
   MAX_RECONNECT_ATTEMPTS: 5,
   INITIAL_RECONNECT_DELAY: 1000,
   MAX_RECONNECT_DELAY: 30000,
+  /** How long to wait for the gateway to confirm authentication */
+  AUTH_TIMEOUT: 30000,
 } as const;

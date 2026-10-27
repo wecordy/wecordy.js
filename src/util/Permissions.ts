@@ -35,6 +35,11 @@ export const PermissionFlagsBits = {
 
   // Admin Permissions
   ViewAuditLog: 1n << 26n,
+
+  // Expression Permissions
+  ManageEmojis: 1n << 27n,
+  ManageStickers: 1n << 28n,
+  ManageSoundboard: 1n << 29n,
 } as const;
 
 /**
@@ -69,6 +74,9 @@ export const PermissionStringToBit: Record<string, bigint> = {
   MOVE_MEMBERS: PermissionFlagsBits.MoveMembers,
   KICK_FROM_VOICE: PermissionFlagsBits.KickFromVoice,
   VIEW_AUDIT_LOG: PermissionFlagsBits.ViewAuditLog,
+  MANAGE_EMOJIS: PermissionFlagsBits.ManageEmojis,
+  MANAGE_STICKERS: PermissionFlagsBits.ManageStickers,
+  MANAGE_SOUNDBOARD: PermissionFlagsBits.ManageSoundboard,
 };
 
 export class Permissions extends BitField {
@@ -99,6 +107,10 @@ export class Permissions extends BitField {
     return this.has(PermissionFlagsBits.Administrator);
   }
 
+  /**
+   * Converts the backend permission object (`{ SEND_MESSAGES: 1, ... }`) to a Permissions bitfield.
+   * Only ALLOW (1) states are taken into account.
+   */
   static fromBackendFormat(backendPermissions: Record<string, number>): Permissions {
     let bits = 0n;
     for (const [key, state] of Object.entries(backendPermissions)) {
@@ -107,5 +119,19 @@ export class Permissions extends BitField {
       }
     }
     return new Permissions(bits);
+  }
+
+  /**
+   * Converts permissions to the backend permission object format (`{ SEND_MESSAGES: 1, ... }`).
+   * Set permissions are marked as ALLOW (1), unset permissions are omitted (NEUTRAL).
+   * @param permissions - Permissions to convert
+   */
+  static toBackendFormat(permissions: BitFieldResolvable): Record<string, number> {
+    const bits = Permissions.resolve(permissions);
+    const result: Record<string, number> = {};
+    for (const [key, bit] of Object.entries(PermissionStringToBit)) {
+      if ((bits & bit) === bit) result[key] = 1;
+    }
+    return result;
   }
 }

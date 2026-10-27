@@ -5,6 +5,11 @@ import type { Channel, APIChannel } from './Channel';
 import type { Role } from './Role';
 import type { Member } from './Member';
 import type { User, APIUser } from './User';
+import type { ServerInvite } from './ServerInvite';
+import type { AuditLog } from './AuditLog';
+import type { ChannelCreateOptions } from '../managers/ChannelManager';
+import type { RoleData } from '../managers/RoleManager';
+import type { AuditLogFetchOptions } from '../managers/ServerManager';
 
 export interface APIServer {
   id: string;
@@ -126,6 +131,97 @@ export class Server extends Base {
    */
   setMembers(members: Collection<string, Member>) {
     this._members = members;
+  }
+
+  /**
+   * Fetches the channels of this server.
+   */
+  async fetchChannels(): Promise<Channel[]> {
+    return this.client.channels.fetchServerChannels(this.id);
+  }
+
+  /**
+   * Fetches the roles of this server.
+   */
+  async fetchRoles(): Promise<Role[]> {
+    return this.client.roles.fetchServerRoles(this.id);
+  }
+
+  /**
+   * Fetches the members of this server.
+   */
+  async fetchMembers(): Promise<Member[]> {
+    return this.client.members.fetchServerMembers(this.id);
+  }
+
+  /**
+   * Creates a channel in this server.
+   * @param options - Channel creation options
+   */
+  async createChannel(options: ChannelCreateOptions): Promise<Channel> {
+    return this.client.channels.create(this.id, options);
+  }
+
+  /**
+   * Creates a role in this server.
+   * @param options - Role creation options
+   */
+  async createRole(options: RoleData & { name: string }): Promise<Role> {
+    return this.client.roles.create(this.id, options);
+  }
+
+  /**
+   * Kicks a user from this server.
+   * @param userId - The user ID
+   * @param durationMinutes - How long the user can't rejoin, in minutes (minimum 1)
+   */
+  async kick(userId: string, durationMinutes: number): Promise<void> {
+    await this.client.members.kick(this.id, userId, durationMinutes);
+  }
+
+  /**
+   * Bans a user from this server.
+   * @param userId - The user ID
+   */
+  async ban(userId: string): Promise<void> {
+    await this.client.members.ban(this.id, userId);
+  }
+
+  /**
+   * Removes the ban of a user.
+   * @param userId - The user ID
+   */
+  async unban(userId: string): Promise<void> {
+    await this.client.members.unban(this.id, userId);
+  }
+
+  /**
+   * Fetches the banned memberships of this server.
+   */
+  async fetchBans(): Promise<Member[]> {
+    return this.client.members.fetchBans(this.id);
+  }
+
+  /**
+   * Creates an invite for this server.
+   */
+  async createInvite(): Promise<ServerInvite> {
+    return this.client.servers.createInvite(this.id);
+  }
+
+  /**
+   * Fetches the invites of this server.
+   */
+  async fetchInvites(): Promise<ServerInvite[]> {
+    return this.client.servers.fetchInvites(this.id);
+  }
+
+  /**
+   * Fetches the audit logs of this server.
+   * @param options - Pagination and filter options
+   */
+  async fetchAuditLogs(options?: AuditLogFetchOptions): Promise<AuditLog[]> {
+    return this.client.servers.fetchAuditLogs(this.id, options);
   }
 
   /**

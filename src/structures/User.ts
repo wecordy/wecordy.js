@@ -1,6 +1,9 @@
 import { Base } from './Base';
 import type { Client } from '../client/Client';
 import type { UserStatusTypeValue } from '../util/Constants';
+import { Formatters } from '../util/Formatters';
+import type { Message } from './Message';
+import type { MessageCreateOptions } from '../managers/MessageManager';
 
 export interface APIUser {
   id: string;
@@ -71,7 +74,6 @@ export class User extends Base {
 
   /**
    * Updates this user with new data (used internally by cache updates).
-   * Returns the old user clone for comparison.
    */
   _patch(data: Partial<APIUser>): User {
     if (data.first_name !== undefined) this.firstName = data.first_name;
@@ -82,9 +84,34 @@ export class User extends Base {
     if (data.avatar_url !== undefined) this.avatarURL = data.avatar_url ?? null;
     if (data.banner_url !== undefined) this.bannerURL = data.banner_url ?? null;
     if (data.bio !== undefined) this.bio = data.bio ?? null;
+    if (data.is_bot !== undefined) this.bot = data.is_bot;
+    if (data.is_nitro !== undefined) this.nitro = data.is_nitro;
     return this;
   }
 
+
+  /**
+   * The mention string for this user.
+   */
+  get mention(): string {
+    return Formatters.userMention(this.id, this.username);
+  }
+
+  /**
+   * Sends a direct message to this user.
+   * @param content - The message content or options
+   */
+  async send(content: string | MessageCreateOptions): Promise<Message> {
+    return this.client.messages._sendDM(this.id, content);
+  }
+
+  /**
+   * Fetches the direct messages with this user.
+   * @param options - Pagination options
+   */
+  async fetchMessages(options?: { before?: string; after?: string; limit?: number }): Promise<Message[]> {
+    return this.client.messages.fetchDirectMessages(this.id, options);
+  }
 
   toJSON(): Record<string, unknown> {
     return {

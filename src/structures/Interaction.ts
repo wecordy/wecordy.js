@@ -1,12 +1,13 @@
 import { Base } from './Base';
 import type { Client } from '../client/Client';
-import { InteractionType, InteractionResponseType } from '../util/Constants';
-import { APIRoutes } from '../rest/APIRoutes';
+import { InteractionType, ApplicationCommandOptionType } from '../util/Constants';
 import type { User, APIUser } from './User';
 import type { Channel, APIChannel } from './Channel';
 import type { Server, APIServer } from './Server';
 import type { Member, APIMember } from './Member';
+import type { Message } from './Message';
 import { Application, type APIApplication } from './Application';
+import type { MessageCreateOptions } from '../managers/MessageManager';
 
 /**
  * Raw interaction data as dispatched by the backend INTERACTION_CREATE event.
@@ -21,6 +22,7 @@ export interface APIInteraction {
   user?: APIUser;
   member?: APIMember;
   data?: APIInteractionData;
+  version?: number;
 }
 
 /**
@@ -38,7 +40,8 @@ export interface APIInteractionData {
  */
 export interface APIInteractionOption {
   name: string;
-  type: number;
+  /** May be omitted by some clients */
+  type?: number;
   value?: string | number | boolean;
   options?: APIInteractionOption[];
 }
@@ -143,6 +146,8 @@ export class Interaction extends Base {
       } else if (this.member.userId) {
         this.userId = this.member.userId;
       }
+    } else if (this.serverId && this.userId) {
+      this.member = this.client.members.resolveByUser(this.serverId, this.userId) ?? null;
     }
 
     this.data = data.data ?? null;
@@ -180,10 +185,25 @@ export class Interaction extends Base {
 }
 
 /**
+ * Content accepted when replying to an interaction.
+ * Wecordy doesn't support ephemeral responses yet; `ephemeral` is ignored and replies are sent
+ * as regular channel messages.
+ */
+export type InteractionReplyOptions =
+  | string
+  | { content: string; ephemeral?: boolean; attachments?: MessageCreateOptions['attachments'] };
+
+/**
  * Represents a slash command interaction.
  * Provides methods to respond to the command.
+ *
+ * The Wecordy API has no interaction callback endpoint yet, so replies are sent as regular
+ * messages to the channel the command was used in.
  */
 export class CommandInteraction extends Interaction {
+  /** The message sent by {@link reply} (or by {@link editReply} after a deferral) */
+  public replyMessage: Message | null = null;
+
   /**
    * The name of the command that was invoked.
    */
@@ -199,14 +219,22 @@ export class CommandInteraction extends Interaction {
   }
 
   /**
-   * Gets a specific option value by name.
+   * The options of the invoked (sub-)command. When a sub-command (group) was used,
+   * this returns the options of that sub-command.
+   */
+  get options(): APIInteractionOption[] {
+    return this.getSubCommand()?.options ?? this.data?.options ?? [];
+  }
+
+  /**
+   * Gets a specific option by name. Options of the invoked sub-command are searched.
    * @param name - The option name
    * @param required - Whether the option is required (throws if missing)
    */
   getOption(name: string, required: true): APIInteractionOption;
   getOption(name: string, required?: false): APIInteractionOption | undefined;
   getOption(name: string, required?: boolean): APIInteractionOption | undefined {
-    const option = this.data?.options?.find((o) => o.name === name);
+    const option = this.options.find((o) => o.name === name);
     if (!option && required) {
       throw new Error(`Required option "${name}" was not provided.`);
     }
@@ -222,7 +250,7 @@ export class CommandInteraction extends Interaction {
   getString(name: string, required?: false): string | null;
   getString(name: string, required?: boolean): string | null {
     const option = this.getOption(name, required as true);
-    return (option?.value as string) ?? null;
+    return option?.value !== undefined && option.value !== null ? String(option.value) : null;
   }
 
   /**
@@ -233,8 +261,22 @@ export class CommandInteraction extends Interaction {
   getInteger(name: string, required: true): number;
   getInteger(name: string, required?: false): number | null;
   getInteger(name: string, required?: boolean): number | null {
+    const value = this.getNumber(name, required as true);
+    return value === null ? null : Math.trunc(value);
+  }
+
+  /**
+   * Gets a number (decimal) option value.
+   * @param name - The option name
+   * @param required - Whether the option is required
+   */
+  getNumber(name: string, required: true): number;
+  getNumber(name: string, required?: false): number | null;
+  getNumber(name: string, required?: boolean): number | null {
     const option = this.getOption(name, required as true);
-    return (option?.value as number) ?? null;
+    if (option?.value === undefined || option.value === null || option.value === '') return null;
+    const value = Number(option.value);
+    return Number.isNaN(value) ? null : value;
   }
 
   /**
@@ -246,67 +288,155 @@ export class CommandInteraction extends Interaction {
   getBoolean(name: string, required?: false): boolean | null;
   getBoolean(name: string, required?: boolean): boolean | null {
     const option = this.getOption(name, required as true);
-    return (option?.value as boolean) ?? null;
+    if (option?.value === undefined || option.value === null) return null;
+    if (typeof option.value === 'string') return option.value === 'true';
+    return Boolean(option.value);
   }
 
   /**
-   * Gets all sub-command options, if any.
+   * Gets the user ID of a user option.
+   * @param name - The option name
+   * @param required - Whether the option is required
+   */
+  getUserId(name: string, required: true): string;
+  getUserId(name: string, required?: false): string | null;
+  getUserId(name: string, required?: boolean): string | null {
+    return this.getString(name, required as true);
+  }
+
+  /**
+   * Gets the channel ID of a channel option.
+   * @param name - The option name
+   * @param required - Whether the option is required
+   */
+  getChannelId(name: string, required: true): string;
+  getChannelId(name: string, required?: false): string | null;
+  getChannelId(name: string, required?: boolean): string | null {
+    return this.getString(name, required as true);
+  }
+
+  /**
+   * Gets the role ID of a role option.
+   * @param name - The option name
+   * @param required - Whether the option is required
+   */
+  getRoleId(name: string, required: true): string;
+  getRoleId(name: string, required?: false): string | null;
+  getRoleId(name: string, required?: boolean): string | null {
+    return this.getString(name, required as true);
+  }
+
+  /**
+   * Gets the invoked sub-command option, if any (descends into sub-command groups).
    */
   getSubCommand(): APIInteractionOption | undefined {
-    return this.data?.options?.find((o) => o.type === 1);
+    let options = this.data?.options ?? [];
+    let found: APIInteractionOption | undefined;
+    for (let depth = 0; depth < 2; depth++) {
+      const sub = options.find(isSubCommandOption);
+      if (!sub) break;
+      found = sub;
+      options = sub.options ?? [];
+    }
+    return found;
   }
 
   /**
    * Replies to this interaction with a message.
    * @param content - The reply text or options
+   * @returns The sent message
    */
-  async reply(content: string | { content: string; ephemeral?: boolean }): Promise<void> {
+  async reply(content: InteractionReplyOptions): Promise<Message> {
     if (this.replied || this.deferred) {
       throw new Error('This interaction has already been replied to or deferred.');
     }
 
-    if (!this.channelId) {
-      throw new Error('Cannot reply to an interaction without a channel.');
-    }
-
-    const text = typeof content === 'string' ? content : content.content;
-    
-    await this.client.messages.send(this.channelId, { text });
-
+    const message = await this.sendMessage(content);
+    this.replyMessage = message;
     this.replied = true;
+    return message;
   }
 
   /**
-   * Defers the reply, showing a "thinking" state.
-   * Use followUp() to send the actual response later.
+   * Defers the reply. Use {@link editReply} or {@link followUp} to send the actual response later.
+   * Wecordy doesn't show a "thinking" state yet; this only updates the local interaction state.
    */
   async deferReply(): Promise<void> {
     if (this.replied || this.deferred) {
       throw new Error('This interaction has already been replied to or deferred.');
     }
 
-    // Backend doesn't support interaction states natively yet.
     this.deferred = true;
   }
 
   /**
-   * Edits the original reply to this interaction.
+   * Edits the reply to this interaction. After {@link deferReply} without a reply,
+   * the first call sends the reply.
    * @param content - The new content
+   * @returns The edited (or sent) message
    */
-  async editReply(content: string | { content: string }): Promise<void> {
-    throw new Error('editReply is not supported yet with standard message replies.');
+  async editReply(content: InteractionReplyOptions): Promise<Message> {
+    if (!this.replied && !this.deferred) {
+      throw new Error('This interaction has not been replied to or deferred yet.');
+    }
+
+    if (!this.replyMessage) {
+      const message = await this.sendMessage(content);
+      this.replyMessage = message;
+      this.replied = true;
+      return message;
+    }
+
+    return this.replyMessage.edit(typeof content === 'string' ? content : content.content);
   }
 
   /**
-   * Sends a follow-up message after deferring.
-   * @param content - The follow-up message content
+   * Deletes the reply to this interaction.
    */
-  async followUp(content: string | { content: string }): Promise<void> {
+  async deleteReply(): Promise<void> {
+    if (!this.replyMessage) {
+      throw new Error('This interaction has no reply to delete.');
+    }
+    await this.replyMessage.delete();
+    this.replyMessage = null;
+  }
+
+  /**
+   * Sends a follow-up message.
+   * @param content - The follow-up message content
+   * @returns The sent message
+   */
+  async followUp(content: InteractionReplyOptions): Promise<Message> {
+    return this.sendMessage(content);
+  }
+
+  /**
+   * Sends a message to the channel the interaction was used in.
+   */
+  private async sendMessage(content: InteractionReplyOptions): Promise<Message> {
     if (!this.channelId) {
-      throw new Error('Cannot follow up without a channel.');
+      throw new Error('Cannot respond to an interaction without a channel.');
     }
 
-    const text = typeof content === 'string' ? content : content.content;
-    await this.client.messages.send(this.channelId, { text });
+    const options: MessageCreateOptions =
+      typeof content === 'string'
+        ? { text: content }
+        : { text: content.content, attachments: content.attachments };
+
+    return this.client.messages.send(this.channelId, options);
   }
+}
+
+/**
+ * Whether an interaction option is a sub-command or sub-command group.
+ * Clients may omit the option type; then nested options without a value indicate a sub-command.
+ */
+function isSubCommandOption(option: APIInteractionOption): boolean {
+  if (
+    option.type === ApplicationCommandOptionType.SubCommand ||
+    option.type === ApplicationCommandOptionType.SubCommandGroup
+  ) {
+    return true;
+  }
+  return option.type === undefined && option.value === undefined && Array.isArray(option.options);
 }

@@ -14,7 +14,7 @@ export class BitField {
   static Flags: Record<string, bigint> = {};
 
   constructor(bits: BitFieldResolvable = BitField.DefaultBit) {
-    this.bitfield = BitField.resolve(bits);
+    this.bitfield = (this.constructor as typeof BitField).resolve(bits);
   }
 
   /**
@@ -22,7 +22,7 @@ export class BitField {
    * @param bit - Bit(s) to check for
    */
   has(bit: BitFieldResolvable): boolean {
-    const resolved = BitField.resolve(bit);
+    const resolved = this.resolveBits(bit);
     return (this.bitfield & resolved) === resolved;
   }
 
@@ -31,7 +31,7 @@ export class BitField {
    * @param bits - Bits to check for
    */
   any(bits: BitFieldResolvable): boolean {
-    const resolved = BitField.resolve(bits);
+    const resolved = this.resolveBits(bits);
     return (this.bitfield & resolved) !== 0n;
   }
 
@@ -42,7 +42,7 @@ export class BitField {
   add(...bits: BitFieldResolvable[]): this {
     let total = BitField.DefaultBit;
     for (const bit of bits) {
-      total |= BitField.resolve(bit);
+      total |= this.resolveBits(bit);
     }
     this.bitfield |= total;
     return this;
@@ -55,7 +55,7 @@ export class BitField {
   remove(...bits: BitFieldResolvable[]): this {
     let total = BitField.DefaultBit;
     for (const bit of bits) {
-      total |= BitField.resolve(bit);
+      total |= this.resolveBits(bit);
     }
     this.bitfield &= ~total;
     return this;
@@ -70,6 +70,14 @@ export class BitField {
     return Object.entries(flags)
       .filter(([, bit]) => this.has(bit))
       .map(([name]) => name);
+  }
+
+  /**
+   * Resolves bits using the static resolver of the concrete subclass,
+   * so that subclass flag names (e.g. 'Administrator') can be used.
+   */
+  private resolveBits(bit: BitFieldResolvable): bigint {
+    return (this.constructor as typeof BitField).resolve(bit);
   }
 
   /**
@@ -97,8 +105,7 @@ export class BitField {
       const resolved = this.Flags[bit];
       if (resolved !== undefined) return resolved;
       // Try parsing as numeric string
-      const parsed = BigInt(bit);
-      if (!Number.isNaN(Number(bit))) return parsed;
+      if (/^\d+$/.test(bit)) return BigInt(bit);
       throw new RangeError(`Unknown BitField flag: ${bit}`);
     }
     if (bit instanceof BitField) return bit.bitfield;

@@ -2,11 +2,24 @@ import { Base } from './Base';
 import type { Client } from '../client/Client';
 import type { User, APIUser } from './User';
 import type { Server, APIServer } from './Server';
+import { Formatters } from '../util/Formatters';
+
+/**
+ * Server specific profile of a member. Empty fields fall back to the global user profile.
+ */
+export interface APIMemberProfile {
+  nickname?: string;
+  avatar_url?: string;
+  banner_url?: string;
+  bio?: string;
+  updated_at?: string;
+}
 
 export interface APIMember {
   id: string;
   server_id: string | APIServer;
-  user_id: string | APIUser;
+  /** When populated, member listings include the member's roles as `user_id.roles` */
+  user_id: string | (APIUser & { roles?: Array<string | { id: string }> });
   position?: number;
   message_notifications?: number;
   suppress_everyone?: boolean;
@@ -18,7 +31,15 @@ export interface APIMember {
   kick_expires_at?: string;
   created_at?: string;
   updated_at?: string;
-  roles?: string[];
+  roles?: Array<string | { id: string }>;
+  member_profile?: APIMemberProfile | null;
+}
+
+/**
+ * Normalizes a list of role IDs or populated roles to role IDs.
+ */
+function toRoleIds(roles: Array<string | { id: string }> | undefined): string[] {
+  return (roles ?? []).map((r) => (typeof r === 'string' ? r : r.id));
 }
 
 export class Member extends Base {
@@ -67,6 +88,12 @@ export class Member extends Base {
   /** The role IDs this member has */
   public roleIds: string[];
 
+  /** The server specific nickname of this member, if set */
+  public nickname: string | null;
+
+  /** The server specific profile of this member, if set */
+  public profile: APIMemberProfile | null;
+
   constructor(client: Client, data: APIMember) {
     super(client, data.id);
 
@@ -98,7 +125,16 @@ export class Member extends Base {
     this.kickedAt = data.kicked_at ? new Date(data.kicked_at) : null;
     this.kickExpiresAt = data.kick_expires_at ? new Date(data.kick_expires_at) : null;
     this.joinedAt = data.created_at ? new Date(data.created_at) : null;
-    this.roleIds = data.roles ?? [];
+    this.roleIds = toRoleIds(data.roles ?? (typeof data.user_id === 'object' ? data.user_id?.roles : undefined));
+    this.profile = data.member_profile ?? null;
+    this.nickname = this.profile?.nickname ?? null;
+  }
+
+  /**
+   * The name shown for this member in the server: nickname, full name or username.
+   */
+  get displayName(): string {
+    return this.nickname || this.getFullName() || this.getUsername();
   }
 
   getUsername(): string {
@@ -124,7 +160,11 @@ export class Member extends Base {
     if (data.position !== undefined) this.position = data.position;
     if (data.is_banned !== undefined) this.isBanned = data.is_banned;
     if (data.banned_at !== undefined) this.bannedAt = data.banned_at ? new Date(data.banned_at) : null;
-    if (data.roles !== undefined) this.roleIds = data.roles;
+    if (data.roles !== undefined) this.roleIds = toRoleIds(data.roles);
+    if (data.member_profile !== undefined) {
+      this.profile = data.member_profile ?? null;
+      this.nickname = this.profile?.nickname ?? null;
+    }
 
     if (data.server_id !== undefined) {
       if (typeof data.server_id === 'string' || !data.server_id) {
@@ -149,10 +189,43 @@ export class Member extends Base {
   }
 
   /**
+   * Kicks this member from the server.
+   * @param durationMinutes - How long the user can't rejoin, in minutes (minimum 1)
+   */
+  async kick(durationMinutes: number): Promise<void> {
+    await this.client.members.kick(this.serverId, this.userId, durationMinutes);
+  }
+
+  /**
+   * Bans this member from the server.
+   */
+  async ban(): Promise<void> {
+    await this.client.members.ban(this.serverId, this.userId);
+  }
+
+  /**
+   * Assigns a role to this member.
+   * @param roleId - The role ID
+   */
+  async addRole(roleId: string): Promise<void> {
+    await this.client.roles.assign(this.serverId, roleId, this.userId);
+    if (!this.roleIds.includes(roleId)) this.roleIds.push(roleId);
+  }
+
+  /**
+   * Removes a role from this member.
+   * @param roleId - The role ID
+   */
+  async removeRole(roleId: string): Promise<void> {
+    await this.client.roles.unassign(this.serverId, roleId, this.userId);
+    this.roleIds = this.roleIds.filter((id) => id !== roleId);
+  }
+
+  /**
    * The mention string for this member.
    */
   get mention(): string {
-    return `[@ id="${this.userId}" label="${this.getUsername()}"]`;
+    return Formatters.userMention(this.userId, this.getUsername());
   }
 
   /**
@@ -169,6 +242,7 @@ export class Member extends Base {
       userId: this.userId,
       username: this.getUsername(),
       fullName: this.getFullName(),
+      nickname: this.nickname,
       position: this.position,
       isBanned: this.isBanned,
       joinedAt: this.joinedAt?.toISOString() ?? null,

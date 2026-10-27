@@ -1,1 +1,1 @@
-export { Client, type ClientOptions, type ClientApplication } from './Client';
+export { Client, type ClientOptions, type ClientApplication, type ClientEvents } from './Client';

@@ -10,8 +10,11 @@
  *   .addField('Rules', 'Be nice to everyone.', false)
  *   .setFooter('Wecordy Bot');
  *
- * channel.send({ text: '', embeds: [embed.toJSON()] });
+ * const data = embed.toJSON();
  * ```
+ *
+ * Note: The Wecordy API doesn't accept embeds on messages yet, so the output can't be
+ * sent with `channel.send()` for now.
  */
 export class EmbedBuilder {
   private data: EmbedData = {};

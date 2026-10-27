@@ -6,6 +6,9 @@ import type { Message, APIMessage } from './Message';
 import { ChannelPermissionOverride, type APIChannelPermissionOverride } from './ChannelPermissionOverride';
 import { Collection } from '../util/Collection';
 import { VoiceConnection } from '../voice/VoiceConnection';
+import { Formatters } from '../util/Formatters';
+import type { MessageCreateOptions } from '../managers/MessageManager';
+import type { ChannelEditOptions } from '../managers/ChannelManager';
 
 export interface APIChannel {
   id: string;
@@ -137,8 +140,37 @@ export class Channel extends Base {
    * Sends a message to this channel.
    * @param content - The message content or options
    */
-  async send(content: string | { text: string; attachments?: Array<{ url: string; mimetype: string; size: number }> }): Promise<Message> {
+  async send(content: string | MessageCreateOptions): Promise<Message> {
     return this.client.messages.send(this.id, content);
+  }
+
+  /**
+   * Fetches messages from this channel.
+   * @param options - Pagination options
+   */
+  async fetchMessages(options?: { before?: string; after?: string; limit?: number }): Promise<Message[]> {
+    return this.client.messages.fetchChannelMessages(this.id, options);
+  }
+
+  /**
+   * Fetches the pinned messages of this channel.
+   */
+  async fetchPinnedMessages(): Promise<Message[]> {
+    return this.client.messages.fetchPinned(this.id);
+  }
+
+  /**
+   * Shows the typing indicator in this channel.
+   */
+  async startTyping(): Promise<void> {
+    await this.client.messages.startTyping(this.id);
+  }
+
+  /**
+   * Hides the typing indicator in this channel.
+   */
+  async stopTyping(): Promise<void> {
+    await this.client.messages.stopTyping(this.id);
   }
 
   /**
@@ -149,6 +181,9 @@ export class Channel extends Base {
     if (!this.isVoiceBased()) {
       throw new Error('Cannot join a non-voice channel.');
     }
+
+    const existing = this.client.voiceConnections.get(this.id);
+    if (existing) return existing;
 
     const connection = new VoiceConnection(this.client, {
       channelId: this.id,
@@ -172,15 +207,8 @@ export class Channel extends Base {
    * Updates this channel.
    * @param options - The new channel settings
    */
-  async edit(options: {
-    name?: string;
-    topic?: string;
-    type?: ChannelTypeValue;
-    parent_id?: string;
-    user_limit?: number;
-    slow_mode?: number;
-  }): Promise<Channel> {
-    return this.client.channels.edit(this.id, this.serverId, options);
+  async edit(options: ChannelEditOptions): Promise<Channel> {
+    return this.client.channels.edit(this.id, this.serverId, { name: this.name, ...options });
   }
 
   /**
@@ -239,6 +267,20 @@ export class Channel extends Base {
       }
     }
     return this;
+  }
+
+  /**
+   * The mention string for this channel.
+   */
+  get mention(): string {
+    return Formatters.channelMention(this.id, this.name);
+  }
+
+  /**
+   * The mention string for this channel.
+   */
+  toString(): string {
+    return this.mention;
   }
 
   toJSON(): Record<string, unknown> {

@@ -44,7 +44,12 @@ sudo apt install yt-dlp
 
 ```typescript
 // YouTube üzerinden oynatma
-connection.playUrl('https://www.youtube.com/watch?v=...');
+const player = connection.playUrl('https://www.youtube.com/watch?v=...');
+
+// Parça bittiğinde sıradakine geçmek için
+player.on('finish', () => {
+  // connection.playUrl(nextUrl);
+});
 
 // Yerel dosyadan oynatma (WebM/Opus)
 connection.play('./music/song.webm');
@@ -71,6 +76,7 @@ const client = new Client({
 
 client.on(Events.ClientReady, (readyClient) => {
   console.log(`🚀 ${readyClient.user?.username} olarak başarıyla giriş yapıldı!`);
+  console.log(`Sunucu sayısı: ${readyClient.servers.cache.size}`);
 });
 
 // Gelen mesajları dinleme
@@ -89,9 +95,9 @@ client.login('YOUR_BOT_TOKEN');
 ### Slash Komutlarını Kullanma
 
 ```typescript
-import { Client, Events, SlashCommandBuilder } from '@wecordy/core';
+import { Client, Events, GatewayIntentBits, SlashCommandBuilder } from '@wecordy/core';
 
-const client = new Client();
+const client = new Client({ intents: [GatewayIntentBits.Servers] });
 
 // Komut Tanımlama
 const pingCommand = new SlashCommandBuilder().setName('ping').setDescription('Botun gecikme süresini ölçer');
@@ -126,6 +132,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.login('YOUR_BOT_TOKEN');
 ```
 
+> [!NOTE]
+> Wecordy API'sinde henüz interaction callback ve ephemeral yanıt desteği yoktur. `interaction.reply()`, komutun kullanıldığı kanala normal bir mesaj gönderir ve gönderilen mesajı döndürür. `editReply()` bu mesajı düzenler, `deferReply()` sonrası ilk `editReply()` ise yanıtı gönderir. Şu an yalnızca global komutlar desteklenir.
+
+### Moderasyon ve Roller
+
+```typescript
+const server = client.servers.cache.get(serverId)!;
+
+// Rol oluşturma (izinler bitfield ya da backend formatında verilebilir)
+const role = await server.createRole({ name: 'Moderatör', color: '#5865F2', permissions: ['KickMembers', 'BanMembers'] });
+
+// Üyeye rol verme / alma
+const member = await client.members.fetch(server.id, userId);
+await member.addRole(role.id);
+await member.removeRole(role.id);
+
+// Kick (süre dakika cinsindendir) ve ban
+await member.kick(60);
+await server.ban(userId);
+await server.unban(userId);
+
+// Mesaj sabitleme ve davet
+await message.pin();
+const invite = await server.createInvite();
+console.log(invite.url());
+```
+
 ## 🏗️ Mimari Yapı
 
 `wecordy.js`, verimlilik ve ölçeklenebilirlik için katmanlı bir mimari kullanır:
@@ -142,20 +175,27 @@ client.login('YOUR_BOT_TOKEN');
 
 | Event               | Tetiklenme Durumu                                   |
 | :------------------ | :-------------------------------------------------- |
-| `ClientReady`       | Bot başarıyla bağlanıp hazır olduğunda.             |
+| `ClientReady`       | Bot giriş yapıp hazır olduğunda (oturum başına bir kez). |
 | `MessageCreate`     | Herhangi bir kanalda mesaj gönderildiğinde.         |
 | `InteractionCreate` | Bir Slash komutu kullanıldığında.                   |
 | `ServerCreate`      | Bot yeni bir sunucuya katıldığında.                 |
+| `ServerDelete`      | Sunucu silindiğinde ya da bot sunucudan çıkarıldığında. |
 | `ServerMemberAdd`   | Bir kullanıcı sunucuya katıldığında.                |
+| `ShardReady`        | Gateway bağlantısı her (yeniden) doğrulandığında.   |
 | `Error`             | Kritik bir hata oluştuğunda (Bağlantı kopması vb.). |
 
 ## ⚙️ Yapılandırma
 
 ```typescript
 const client = new Client({
+  // "Servers" intent'i olmadan bot kanal mesajlarını ve sunucu olaylarını almaz
   intents: ['Servers', 'ServerMessages'],
+  messageCacheMaxSize: 500, // bellekte tutulacak en fazla mesaj sayısı
+  fetchServersOnLogin: true, // girişte botun bulunduğu sunucuları cache'e al
 });
 ```
+
+Geçersiz bir intent adı verilirse `Client` oluşturulurken `ValidationError` fırlatılır; gateway bilinmeyen intent'lerle bağlantıyı reddeder.
 
 ## 🔧 Gereksinimler
 

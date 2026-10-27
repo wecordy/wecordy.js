@@ -9,16 +9,26 @@ import type { Client } from '../client/Client';
 export interface MessageCreateOptions {
   text: string;
   reply_to_message_id?: string;
+  /** Only for channel messages: sends the message as a reply in a forum post */
+  forum_post_id?: string;
+  /** Attachments must be uploaded to the Wecordy CDN (cdn.wecordy.com) beforehand */
   attachments?: APIMessageAttachment[];
   temp_id?: string;
 }
+
+/** Default maximum number of messages kept in the cache */
+const DEFAULT_MESSAGE_CACHE_SIZE = 500;
 
 /**
  * Manages messages (send, edit, delete, react).
  */
 export class MessageManager extends BaseManager<Message> {
+  /** Maximum number of messages kept in the cache (oldest are evicted first) */
+  public readonly maxCacheSize: number;
+
   constructor(client: Client) {
     super(client);
+    this.maxCacheSize = client.options.messageCacheMaxSize ?? DEFAULT_MESSAGE_CACHE_SIZE;
   }
 
   /**
@@ -30,34 +40,27 @@ export class MessageManager extends BaseManager<Message> {
     channelId: string,
     content: string | MessageCreateOptions,
   ): Promise<Message> {
-    const body: MessageCreateOptions =
-      typeof content === 'string'
-        ? { text: content, temp_id: this.generateTempId() }
-        : { ...content, temp_id: content.temp_id ?? this.generateTempId() };
-
     const data = await this.client.rest.put<APIMessage>(
       APIRoutes.sendChannelMessage(),
-      { channel_id: channelId, ...body },
+      { channel_id: channelId, ...this.resolveBody(content) },
     );
     return this._add(data);
   }
 
   /**
    * Edits a message's content.
+   * The backend doesn't return the edited message; the cached message (if any) is updated and returned.
    * @param messageId - The message ID to edit
    * @param newContent - The new text content
    */
-  async edit(messageId: string, newContent: string): Promise<Message> {
-    const data = await this.client.rest.patch<APIMessage>(
+  async edit(messageId: string, newContent: string): Promise<Message | null> {
+    await this.client.rest.patch(
       APIRoutes.editMessage(),
       { message_id: messageId, text: newContent },
     );
     const existing = this.cache.get(messageId);
-    if (existing) {
-      existing._patch(data);
-      return existing;
-    }
-    return this._add(data);
+    if (!existing) return null;
+    return existing._patch({ text: newContent, edited_at: new Date().toISOString() });
   }
 
   /**
@@ -75,6 +78,7 @@ export class MessageManager extends BaseManager<Message> {
 
   /**
    * Reacts to a message with an emoji.
+   * Reacting again with the same emoji removes the reaction.
    * @param channelId - The channel ID
    * @param messageId - The message ID
    * @param emoji - The emoji string
@@ -84,6 +88,51 @@ export class MessageManager extends BaseManager<Message> {
       APIRoutes.channelMessageReaction(),
       { channel_id: channelId, message_id: messageId, emoji },
     );
+  }
+
+  /**
+   * Pins a message in a channel.
+   * @param channelId - The channel ID
+   * @param messageId - The message ID
+   */
+  async pin(channelId: string, messageId: string): Promise<void> {
+    await this.client.rest.post(APIRoutes.pinMessage(), { channel_id: channelId, message_id: messageId });
+    this.cache.get(messageId)?._patch({ is_pinned: true });
+  }
+
+  /**
+   * Unpins a message in a channel.
+   * @param channelId - The channel ID
+   * @param messageId - The message ID
+   */
+  async unpin(channelId: string, messageId: string): Promise<void> {
+    await this.client.rest.post(APIRoutes.unpinMessage(), { channel_id: channelId, message_id: messageId });
+    this.cache.get(messageId)?._patch({ is_pinned: false });
+  }
+
+  /**
+   * Fetches the pinned messages of a channel.
+   * @param channelId - The channel ID
+   */
+  async fetchPinned(channelId: string): Promise<Message[]> {
+    const data = await this.client.rest.post<APIMessage[]>(APIRoutes.pinnedMessages(), { channel_id: channelId });
+    return (data ?? []).map((msg) => this._add({ channel_id: channelId, ...msg }));
+  }
+
+  /**
+   * Shows the typing indicator in a channel.
+   * @param channelId - The channel ID
+   */
+  async startTyping(channelId: string): Promise<void> {
+    await this.client.rest.post(APIRoutes.channelTyping(), { channel_id: channelId });
+  }
+
+  /**
+   * Hides the typing indicator in a channel.
+   * @param channelId - The channel ID
+   */
+  async stopTyping(channelId: string): Promise<void> {
+    await this.client.rest.delete(APIRoutes.channelTyping(), { data: { channel_id: channelId } });
   }
 
   /**
@@ -106,7 +155,7 @@ export class MessageManager extends BaseManager<Message> {
         }
       }
     );
-    return data.map((msg) => this._add(msg));
+    return (data ?? []).map((msg) => this._add(msg));
   }
 
   /**
@@ -119,11 +168,8 @@ export class MessageManager extends BaseManager<Message> {
     userId: string,
     content: string | MessageCreateOptions,
   ): Promise<Message> {
-    const body: MessageCreateOptions =
-      typeof content === 'string'
-        ? { text: content, temp_id: this.generateTempId() }
-        : { ...content, temp_id: content.temp_id ?? this.generateTempId() };
-
+    // forum_post_id is not accepted for DMs
+    const { forum_post_id: _forumPostId, ...body } = this.resolveBody(content);
     const data = await this.client.rest.put<APIMessage>(
       APIRoutes.sendDirectMessage(),
       { user_id: userId, ...body },
@@ -152,7 +198,7 @@ export class MessageManager extends BaseManager<Message> {
    */
   async _reactDM(messageId: string, emoji: string): Promise<void> {
     await this.client.rest.put(
-      APIRoutes.directMessages() + '/reaction',
+      APIRoutes.directMessageReaction(),
       { message_id: messageId, emoji },
     );
   }
@@ -177,18 +223,39 @@ export class MessageManager extends BaseManager<Message> {
         }
       }
     );
-    return data.map((msg) => this._add(msg));
+    return (data ?? []).map((msg) => this._add(msg));
   }
 
   /**
-   * Constructs a Message instance from raw API data and adds it to the cache.
+   * Adds a Message instance to the cache, or constructs one from raw API data.
+   * Raw data for an already cached message updates the cached instance.
+   * The oldest cached messages are evicted once the cache exceeds `maxCacheSize`.
    */
   _add(messageOrData: Message | APIMessage): Message {
+    const existing = messageOrData instanceof Message ? undefined : this.cache.get(messageOrData.id);
     const message = messageOrData instanceof Message
       ? messageOrData
-      : new Message(this.client, messageOrData);
+      : existing?._patch(messageOrData) ?? new Message(this.client, messageOrData);
+    if (!message.id) return message;
+
+    // Re-insert so that recently seen messages are evicted last
+    this.cache.delete(message.id);
     this.cache.set(message.id, message);
+    while (this.cache.size > this.maxCacheSize) {
+      const oldestKey = this.cache.firstKey();
+      if (oldestKey === undefined) break;
+      this.cache.delete(oldestKey);
+    }
     return message;
+  }
+
+  /**
+   * Builds the request body for a new message.
+   */
+  private resolveBody(content: string | MessageCreateOptions): MessageCreateOptions {
+    return typeof content === 'string'
+      ? { text: content, temp_id: this.generateTempId() }
+      : { ...content, temp_id: content.temp_id ?? this.generateTempId() };
   }
 
   /**

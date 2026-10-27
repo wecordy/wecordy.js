@@ -88,10 +88,10 @@ export class SlashCommandBuilder {
 
   /**
    * Sets the default permissions required to use this command.
-   * @param permissions - Permission string (bigint serialized)
+   * @param permissions - Permission bitfield (e.g. `PermissionFlagsBits.ManageMessages`) or its string form
    */
-  setDefaultMemberPermissions(permissions: string): this {
-    this.defaultMemberPermissions = permissions;
+  setDefaultMemberPermissions(permissions: string | bigint | number): this {
+    this.defaultMemberPermissions = permissions.toString();
     return this;
   }
 
@@ -166,12 +166,42 @@ export class SlashCommandBuilder {
   }
 
   /**
+   * Adds a mentionable (user or role) option to this command.
+   * @param fn - Builder function
+   */
+  addMentionableOption(fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    const option = fn(new CommandOptionBuilder(ApplicationCommandOptionType.Mentionable));
+    this.addOption(option.build());
+    return this;
+  }
+
+  /**
+   * Adds an attachment option to this command.
+   * @param fn - Builder function
+   */
+  addAttachmentOption(fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    const option = fn(new CommandOptionBuilder(ApplicationCommandOptionType.Attachment));
+    this.addOption(option.build());
+    return this;
+  }
+
+  /**
    * Adds a sub-command to this command.
    * @param fn - Builder function that configures the sub-command
    */
   addSubCommand(fn: (subCommand: SubCommandBuilder) => SubCommandBuilder): this {
     const sub = fn(new SubCommandBuilder());
     this.addOption(sub.build());
+    return this;
+  }
+
+  /**
+   * Adds a sub-command group to this command.
+   * @param fn - Builder function that configures the sub-command group
+   */
+  addSubCommandGroup(fn: (group: SubCommandGroupBuilder) => SubCommandGroupBuilder): this {
+    const group = fn(new SubCommandGroupBuilder());
+    this.addOption(group.build());
     return this;
   }
 
@@ -346,6 +376,34 @@ export class SubCommandBuilder {
     return this;
   }
 
+  addChannelOption(fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    return this.addTypedOption(ApplicationCommandOptionType.Channel, fn);
+  }
+
+  addRoleOption(fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    return this.addTypedOption(ApplicationCommandOptionType.Role, fn);
+  }
+
+  addMentionableOption(fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    return this.addTypedOption(ApplicationCommandOptionType.Mentionable, fn);
+  }
+
+  addNumberOption(fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    return this.addTypedOption(ApplicationCommandOptionType.Number, fn);
+  }
+
+  addAttachmentOption(fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    return this.addTypedOption(ApplicationCommandOptionType.Attachment, fn);
+  }
+
+  private addTypedOption(type: number, fn: (option: CommandOptionBuilder) => CommandOptionBuilder): this {
+    if (this.subOptions.length >= 25) {
+      throw new ValidationError('subCommand.options', 'A sub-command can have at most 25 options.');
+    }
+    this.subOptions.push(fn(new CommandOptionBuilder(type)).build());
+    return this;
+  }
+
   build(): CommandOption {
     if (!this.subName) throw new ValidationError('subCommand.name', 'Sub-command name is required.');
     if (!this.subDescription) throw new ValidationError('subCommand.description', 'Sub-command description is required.');
@@ -355,6 +413,56 @@ export class SubCommandBuilder {
       description: this.subDescription,
       type: ApplicationCommandOptionType.SubCommand,
       options: this.subOptions.length > 0 ? this.subOptions : undefined,
+    };
+  }
+}
+
+/**
+ * Builder for sub-command groups within a slash command.
+ */
+export class SubCommandGroupBuilder {
+  private groupName: string = '';
+  private groupDescription: string = '';
+  private subCommands: CommandOption[] = [];
+
+  setName(name: string): this {
+    if (!COMMAND_NAME_REGEX.test(name)) {
+      throw new ValidationError('subCommandGroup.name', `Sub-command group name must match ${COMMAND_NAME_REGEX}.`);
+    }
+    this.groupName = name;
+    return this;
+  }
+
+  setDescription(description: string): this {
+    if (!description || description.length > 100) {
+      throw new ValidationError('subCommandGroup.description', 'Sub-command group description must be 1-100 characters.');
+    }
+    this.groupDescription = description;
+    return this;
+  }
+
+  addSubCommand(fn: (subCommand: SubCommandBuilder) => SubCommandBuilder): this {
+    if (this.subCommands.length >= 25) {
+      throw new ValidationError('subCommandGroup.options', 'A sub-command group can have at most 25 sub-commands.');
+    }
+    this.subCommands.push(fn(new SubCommandBuilder()).build());
+    return this;
+  }
+
+  build(): CommandOption {
+    if (!this.groupName) throw new ValidationError('subCommandGroup.name', 'Sub-command group name is required.');
+    if (!this.groupDescription) {
+      throw new ValidationError('subCommandGroup.description', 'Sub-command group description is required.');
+    }
+    if (this.subCommands.length === 0) {
+      throw new ValidationError('subCommandGroup.options', 'A sub-command group needs at least one sub-command.');
+    }
+
+    return {
+      name: this.groupName,
+      description: this.groupDescription,
+      type: ApplicationCommandOptionType.SubCommandGroup,
+      options: this.subCommands,
     };
   }
 }

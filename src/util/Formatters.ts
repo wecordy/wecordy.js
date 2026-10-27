@@ -19,7 +19,17 @@ export class Formatters {
    * @returns The formatted mention string.
    */
   static roleMention(roleId: string, label: string): string {
-    return this.formatMention(roleId, label);
+    return this.formatMention(roleId, label, 'role');
+  }
+
+  /**
+   * Formats a channel mention.
+   * @param channelId - The ID of the channel to mention.
+   * @param label - The label to display for the mention (usually the channel name).
+   * @returns The formatted mention string.
+   */
+  static channelMention(channelId: string, label: string): string {
+    return `[# id="${channelId}" label="${label}"]`;
   }
 
   /**
@@ -119,14 +129,15 @@ export class Formatters {
    * Internal helper to format a mention in the Wecordy style.
    * @param id - The ID of the entity.
    * @param label - The display label.
+   * @param type - The mention type. User mentions omit the type attribute.
    * @returns The formatted mention string.
    */
-  private static formatMention(id: string, label: string): string {
-    return `[@ id="${id}" label="${label}"]`;
+  private static formatMention(id: string, label: string, type: 'user' | 'role' = 'user'): string {
+    return type === 'role' ? `[@ id="${id}" label="${label}" type="role"]` : `[@ id="${id}" label="${label}"]`;
   }
 
   /**
-   * Cleans mentions and slash commands from raw content.
+   * Cleans mentions, channel mentions and slash commands from raw content and strips Markdown.
    * @param content - The raw content string
    * @returns The cleaned content string
    */
@@ -134,10 +145,11 @@ export class Formatters {
     if (!content) return '';
 
     const mentionRegex = /\[@\s*id="([^"]+)"\s+label="([^"]+)"(?:\s+type="([^"]+)")?\s*\]/g;
+    const channelMentionRegex = /\[#\s*id="([^"]+)"\s+label="([^"]*)"\s*\]/g;
     const commandRegex =
       /\[\s*\/\s*id="([^"]+)"\s+label="([^"]+)"\s+applicationId="([^"]+)"(?:\s+optionValues="([^"]+)")?\s*\]/g;
 
-    let result = content.replace(mentionRegex, '@$2');
+    let result = content.replace(mentionRegex, '@$2').replace(channelMentionRegex, '#$2');
 
     result = result.replace(commandRegex, (match, id, label, appId, optionValues) => {
       let optionsStr = '';
@@ -182,16 +194,17 @@ export class Formatters {
     result = result.replace(/\[([^\]]*)\]\([^)]+\)/g, '$1');
 
     // Bold + italic ***text*** or ___text___
+    // Underscore variants must not start/end inside a word (e.g. some_user_name)
     result = result.replace(/\*{3}(.+?)\*{3}/g, '$1');
-    result = result.replace(/_{3}(.+?)_{3}/g, '$1');
+    result = result.replace(/(^|[^\w])_{3}(.+?)_{3}(?!\w)/g, '$1$2');
 
     // Bold **text** or __text__
     result = result.replace(/\*{2}(.+?)\*{2}/g, '$1');
-    result = result.replace(/_{2}(.+?)_{2}/g, '$1');
+    result = result.replace(/(^|[^\w])_{2}(.+?)_{2}(?!\w)/g, '$1$2');
 
     // Italic *text* or _text_
     result = result.replace(/\*(.+?)\*/g, '$1');
-    result = result.replace(/_(.+?)_/g, '$1');
+    result = result.replace(/(^|[^\w])_(.+?)_(?!\w)/g, '$1$2');
 
     // Strikethrough ~~text~~
     result = result.replace(/~~(.+?)~~/g, '$1');

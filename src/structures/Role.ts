@@ -1,7 +1,9 @@
 import { Base } from './Base';
 import type { Client } from '../client/Client';
-import { Permissions, PermissionStringToBit } from '../util/Permissions';
+import { Permissions } from '../util/Permissions';
+import { Formatters } from '../util/Formatters';
 import type { Server, APIServer } from './Server';
+import type { RoleData } from '../managers/RoleManager';
 
 export interface APIRole {
   id: string;
@@ -94,14 +96,32 @@ export class Role extends Base {
     if (data.permissions !== undefined) {
       this.permissions = Permissions.fromBackendFormat(data.permissions ?? {});
     }
+    if (data.is_default !== undefined) this.isDefault = data.is_default;
+    if (data.is_managed !== undefined) this.isManaged = data.is_managed;
+    if (data.bot_id !== undefined) this.botId = data.bot_id ?? null;
     return this;
+  }
+
+  /**
+   * Edits this role.
+   * @param options - The fields to update
+   */
+  async edit(options: RoleData): Promise<Role> {
+    return this.client.roles.edit(this.serverId, this.id, options);
+  }
+
+  /**
+   * Deletes this role.
+   */
+  async delete(): Promise<void> {
+    await this.client.roles.delete(this.serverId, this.id);
   }
 
   /**
    * The mention string for this role.
    */
   get mention(): string {
-    return `[@ id="${this.id}" label="${this.name}"]`;
+    return Formatters.roleMention(this.id, this.name);
   }
 
   /**

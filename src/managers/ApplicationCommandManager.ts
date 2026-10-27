@@ -1,6 +1,7 @@
 import { APIRoutes } from '../rest/APIRoutes';
 import type { Client } from '../client/Client';
 import { SlashCommandBuilder } from '../builders/SlashCommandBuilder';
+import { WecordyError } from '../errors';
 
 /**
  * Raw application command data as returned by the backend.
@@ -39,8 +40,19 @@ export class ApplicationCommandManager {
    * Fetches all global commands for this application.
    */
   async fetch(): Promise<APIApplicationCommand[]> {
-    return this.client.rest.get<APIApplicationCommand[]>(
+    const data = await this.client.rest.get<APIApplicationCommand[]>(
       APIRoutes.applicationCommands(this.applicationId),
+    );
+    return data ?? [];
+  }
+
+  /**
+   * Fetches a single global command.
+   * @param commandId - The command ID
+   */
+  async fetchOne(commandId: string): Promise<APIApplicationCommand> {
+    return this.client.rest.get<APIApplicationCommand>(
+      APIRoutes.applicationCommand(this.applicationId, commandId),
     );
   }
 
@@ -71,10 +83,11 @@ export class ApplicationCommandManager {
     commands: Array<SlashCommandBuilder | Record<string, unknown>>,
   ): Promise<APIApplicationCommand[]> {
     const data = commands.map((cmd) => (cmd instanceof SlashCommandBuilder ? cmd.toJSON() : cmd));
-    return this.client.rest.put<APIApplicationCommand[]>(
+    const result = await this.client.rest.put<APIApplicationCommand[]>(
       APIRoutes.applicationCommands(this.applicationId),
       { commands: data },
     );
+    return result ?? [];
   }
 
   /**
@@ -92,65 +105,64 @@ export class ApplicationCommandManager {
    * @param commandId - The command ID to edit
    * @param data - The fields to update
    */
-  async edit(commandId: string, data: Partial<Record<string, unknown>>): Promise<APIApplicationCommand> {
+  async edit(
+    commandId: string,
+    data: SlashCommandBuilder | Partial<Record<string, unknown>>,
+  ): Promise<APIApplicationCommand> {
+    // The command type can't be changed after creation
+    const { type: _type, ...body } = data instanceof SlashCommandBuilder ? data.toJSON() : data;
     return this.client.rest.patch<APIApplicationCommand>(
       APIRoutes.applicationCommand(this.applicationId, commandId),
-      data,
+      body,
     );
   }
 
   // ─── Server-Specific Commands ─────────────────────────────────
+  // The Wecordy API only supports global commands for now. These methods are kept
+  // for backwards compatibility and fail with a descriptive error.
 
   /**
    * Fetches all commands for a specific server.
-   * @param serverId - The server ID
+   * @deprecated Server specific commands are not supported by the Wecordy API yet. Use {@link fetch}.
    */
-  async fetchServer(serverId: string): Promise<APIApplicationCommand[]> {
-    return this.client.rest.get<APIApplicationCommand[]>(
-      APIRoutes.applicationServerCommands(this.applicationId, serverId),
-    );
+  async fetchServer(_serverId: string): Promise<APIApplicationCommand[]> {
+    throw this.serverCommandsUnsupported();
   }
 
   /**
    * Registers a single command for a specific server.
-   * @param serverId - The server ID
-   * @param command - The command data
+   * @deprecated Server specific commands are not supported by the Wecordy API yet. Use {@link create}.
    */
   async createServer(
-    serverId: string,
-    command: SlashCommandBuilder | Record<string, unknown>,
+    _serverId: string,
+    _command: SlashCommandBuilder | Record<string, unknown>,
   ): Promise<APIApplicationCommand> {
-    const data = command instanceof SlashCommandBuilder ? command.toJSON() : command;
-    return this.client.rest.post<APIApplicationCommand>(
-      APIRoutes.applicationServerCommands(this.applicationId, serverId),
-      data,
-    );
+    throw this.serverCommandsUnsupported();
   }
 
   /**
    * Bulk overwrites all commands for a specific server.
-   * @param serverId - The server ID
-   * @param commands - The commands to set
+   * @deprecated Server specific commands are not supported by the Wecordy API yet. Use {@link set}.
    */
   async setServer(
-    serverId: string,
-    commands: Array<SlashCommandBuilder | Record<string, unknown>>,
+    _serverId: string,
+    _commands: Array<SlashCommandBuilder | Record<string, unknown>>,
   ): Promise<APIApplicationCommand[]> {
-    const data = commands.map((cmd) => (cmd instanceof SlashCommandBuilder ? cmd.toJSON() : cmd));
-    return this.client.rest.put<APIApplicationCommand[]>(
-      APIRoutes.applicationServerCommands(this.applicationId, serverId),
-      { commands: data },
-    );
+    throw this.serverCommandsUnsupported();
   }
 
   /**
    * Deletes a single server-specific command.
-   * @param serverId - The server ID
-   * @param commandId - The command ID
+   * @deprecated Server specific commands are not supported by the Wecordy API yet. Use {@link delete}.
    */
-  async deleteServer(serverId: string, commandId: string): Promise<void> {
-    await this.client.rest.delete(
-      APIRoutes.applicationServerCommand(this.applicationId, serverId, commandId),
+  async deleteServer(_serverId: string, _commandId: string): Promise<void> {
+    throw this.serverCommandsUnsupported();
+  }
+
+  private serverCommandsUnsupported(): WecordyError {
+    return new WecordyError(
+      'UNSUPPORTED',
+      'Server specific commands are not supported by the Wecordy API yet. Register global commands instead.',
     );
   }
 }

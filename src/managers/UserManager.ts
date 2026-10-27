@@ -27,12 +27,19 @@ export class UserManager extends BaseManager<User> {
   }
 
   /**
-   * Constructs a User instance from raw API data and adds it to the cache.
+   * Adds a User instance to the cache, or constructs one from raw API data.
+   * Raw data for an already cached user updates the cached instance instead of replacing it.
    */
   _add(userOrData: User | APIUser): User {
-    const user = userOrData instanceof User
-      ? userOrData
-      : new User(this.client, userOrData);
+    if (userOrData instanceof User) {
+      this.cache.set(userOrData.id, userOrData);
+      return userOrData;
+    }
+
+    const existing = this.cache.get(userOrData.id);
+    if (existing) return existing._patch(userOrData);
+
+    const user = new User(this.client, userOrData);
     this.cache.set(user.id, user);
     return user;
   }

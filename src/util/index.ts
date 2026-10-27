@@ -19,6 +19,9 @@ export {
   type UserStatusTypeValue,
   GatewayEvents,
   type GatewayEventName,
+  GatewayIntentBits,
+  type GatewayIntentName,
   APIConstants,
 } from './Constants';
+export { Formatters } from './Formatters';
 export { Permissions, PermissionFlagsBits, PermissionStringToBit } from './Permissions';

@@ -6,7 +6,7 @@ import { RESTError, TokenError } from '../errors';
  * Configuration options for the REST client.
  */
 export interface RESTOptions {
-  /** Base URL for the API (default: http://localhost:3000/api) */
+  /** Base URL for the API (default: https://gateway.wecordy.com/api) */
   baseURL?: string;
   /** Request timeout in milliseconds (default: 15000) */
   timeout?: number;
@@ -134,11 +134,13 @@ export class RESTClient {
       });
 
       // The backend wraps responses in ServiceResponse { data, items, message, success, ... }
-      // We extract the inner data or items if the response follows that pattern
+      // We extract the inner data or items if the response follows that pattern.
+      // A ServiceResponse without data/items (e.g. edit/delete endpoints) resolves to undefined.
       const body = response.data;
       if (body && typeof body === 'object') {
-        if ('data' in body) return body.data as T;
-        if ('items' in body) return body.items as T;
+        if (body.data !== undefined) return body.data as T;
+        if (body.items !== undefined) return body.items as T;
+        if ('success' in body && 'status_code' in body) return undefined as T;
       }
       return body as T;
     } catch (error: unknown) {
@@ -161,7 +163,7 @@ export class RESTClient {
       const responseBody = error.response.data;
 
       // Rate limited (429) — wait and retry
-      if (status === 429) {
+      if (status === 429 && attempt < this.maxRetries) {
         const retryAfter = this.parseRetryAfter(error.response);
         await this.sleep(retryAfter);
         return this.request<T>(method, path, data, config, attempt + 1);
@@ -186,11 +188,15 @@ export class RESTClient {
   private extractErrorMessage(body: unknown): string {
     if (body && typeof body === 'object') {
       const obj = body as Record<string, unknown>;
-      if (typeof obj.message === 'string') return obj.message;
-      if (Array.isArray(obj.errors) && obj.errors.length > 0) {
-        return obj.errors.map((e: { message?: string }) => e.message).join(', ');
-      }
+      // Validation errors carry a generic message and the details in `errors`
+      const details = Array.isArray(obj.errors)
+        ? obj.errors.map((e: { message?: string }) => e.message).filter(Boolean).join(', ')
+        : '';
+      const message = typeof obj.message === 'string' ? obj.message : '';
+      if (message && details) return `${message} (${details})`;
+      if (message || details) return message || details;
     }
+    if (typeof body === 'string' && body) return body;
     return 'Unknown API error';
   }
 

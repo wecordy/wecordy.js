@@ -40,7 +40,7 @@ export enum Events {
   ServerCreate = 'serverCreate',
   /** Emitted when a server is updated */
   ServerUpdate = 'serverUpdate',
-  /** Emitted when the bot is removed from a server */
+  /** Emitted when a server is deleted or the bot leaves, is kicked or banned from a server */
   ServerDelete = 'serverDelete',
 
   // ─── Server Member Events ──────────────────────────────────────
@@ -74,10 +74,14 @@ export enum Events {
   VoiceChannelDisconnect = 'voiceChannelDisconnect',
   /** Emitted when a user is moved to a different voice channel */
   VoiceChannelMove = 'voiceChannelMove',
+  /** Emitted when the voice state (mute, deafen, screen share) of a user changes */
+  VoiceStateUpdate = 'voiceStateUpdate',
 
   // ─── Interaction Events ────────────────────────────────────────
   /** Emitted when a slash command interaction is received */
   InteractionCreate = 'interactionCreate',
+  /** Emitted when the application's commands were updated */
+  ApplicationCommandsUpdate = 'applicationCommandsUpdate',
 
   // ─── Moderation Events ────────────────────────────────────────
   /** Emitted when a user is banned from a server */
@@ -126,7 +130,7 @@ export enum Events {
   Warn = 'warn',
   /** Emitted when an error occurs */
   Error = 'error',
-  /** Emitted when the WebSocket connection state changes */
+  /** Emitted every time the gateway connection is (re-)authenticated */
   ShardReady = 'shardReady',
   /** Emitted when the WebSocket is reconnecting */
   ShardReconnecting = 'shardReconnecting',
